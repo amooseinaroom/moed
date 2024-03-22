@@ -41,6 +41,8 @@ The editor automatically inserts and removes tabs when adding or removing lines 
   - return : accept current cursor position and close search buffer mode
   - ctrl+return : accept current cursor position and close search buffer mode
   - escape : set current cursor position to start of the search and close search buffer mode
+- ctrl+tab : switch to next buffer
+- ctrl+shift+tab : switch to previous buffer
 - down : move to down a line
 - up : move to up a line
 - home : to logical line start (without leading tabs) or to line start if already at logical line start
