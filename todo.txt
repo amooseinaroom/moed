@@ -1,0 +1,25 @@
+
+- search
+- replace
+
+- selection
+    - with multiple cursors?
+
+- dynamic font
+
+- congifuration
+    - file
+    - gui
+
+- show key bindings
+
+- store window position
+
+- split view
+    - multi window?
+
+- copy/paste
+
+- undo/redo
+
+- better scroll

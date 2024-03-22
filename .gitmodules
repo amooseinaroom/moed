@@ -1,0 +1,3 @@
+[submodule "molib"]
+	path = molib
+	url = https://github.com/amooseinaroom/molib.git
