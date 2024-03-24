@@ -73,5 +73,4 @@ This project uses the C single header libraries molib as a git submodule.
 
 ## continuous build
 1. Pull the latest changes with `git pull --recurse-submodules`
-4. In `build.bat` you can enable/disable debug builds by setting `set debug=1` or `set debug=0` respectively.
-5. In Visual Studio x64 Command Prompt run `build.bat`
+2. In Visual Studio x64 Command Prompt run `build.bat`
