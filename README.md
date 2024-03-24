@@ -37,8 +37,8 @@ The editor currently only opens files with the following extensions:
 
 The editor automatically inserts and removes tabs when adding or removing lines and tries to remove trailing spaces.
 
-- ctrl + S : save active buffer
-- ctrl + P : toggle file open mode
+- ctrl+S : save active buffer
+- ctrl+P : toggle file open mode
   - down : select next item
   - up : select previous item
   - tab : path to selected item
@@ -46,7 +46,7 @@ The editor automatically inserts and removes tabs when adding or removing lines 
   - return : open file
   - ctrl+return : open file or all files in directory (not recursive)
   - escape : close file open mode
-- ctrl + F : toggle search buffer mode
+- ctrl+F : toggle search buffer mode
   - down : search next    
   - return : accept current position and close search buffer mode
   - ctrl+return : accept current position and close search buffer mode
