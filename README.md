@@ -3,11 +3,13 @@ simple minimal text editor for programming using C and molib
 
 # todo
 
+- copy/paste
+- selection
+    - with multiple cursors?
+- undo/redo
 - detect and preserve line endings (currently saves buffers out with \r\n line endings)
 - search
   - open buffer search
-- selection
-    - with multiple cursors?
 - dynamic font
   - with fallback fonts
 - congifuration
@@ -17,8 +19,6 @@ simple minimal text editor for programming using C and molib
 - store window position
 - split view
   - multi window?
-- copy/paste
-- undo/redo
 - better scroll
 
 # key bindings

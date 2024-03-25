@@ -3,6 +3,10 @@
 #define mop_debug
 #endif
 
+#if !defined mo_enable_hot_reloading
+#define mo_enable_hot_reloading 0
+#endif
+
 #include "mo_basic.h"
 
 #include "mo_platform.h"
@@ -112,6 +116,8 @@ draw_single_line_text_signature;
 #define draw_text_advance_signature void draw_text_advance(moui_state *ui, editor_settings settings, rgba color, moui_simple_text_iterator *iterator, draw_text_closest_hit *closest_hit)
 draw_text_advance_signature;
 
+mop_hot_update_signature;
+
 #if 1
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 #else
@@ -193,13 +199,25 @@ int main(int argument_count, char *arguments[])
     platform.delta_seconds = 0.0f;
     platform.last_realtime_counter = realtime_counter;
 
+#if !mo_enable_hot_reloading
+    b8 did_reload = true;
+#endif
+
     while (true)
     {
         mop_handle_messages(&platform);
 
-        b8 did_reload = mop_hot_reload(&platform, &hot_reload_state, s("hot"));
+    #if mo_enable_hot_reloading
 
+        b8 did_reload = mop_hot_reload(&platform, &hot_reload_state, s("hot"));
         hot_reload_state.hot_update(&platform, sl(u8_array) { (u8 *) program, sizeof(*program) }, did_reload);
+
+    #else
+
+        mop_hot_update(&platform, sl(u8_array) { (u8 *) program, sizeof(*program) }, did_reload);
+        did_reload = false;
+
+    #endif
 
         // give update a chance to catch and override quit
         if (platform.do_quit)

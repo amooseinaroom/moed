@@ -5,8 +5,8 @@
 #include "mo_memory_arena.h"
 #include "mo_string.h"
 
-// TODO: 1 MB per file for now
-#define editor_buffer_byte_count (1 << 20)
+// TODO: 8 MB per file for now
+#define editor_buffer_byte_count (8 << 20)
 
 typedef struct
 {
@@ -447,6 +447,18 @@ void editor_init(editor_state *editor, mop_platform *platform)
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_up;
         command->character.is_symbol = true;
+
+        command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_last);
+        command->check_mask = editor_character_mask_all;
+        command->character.code = mop_character_symbol_down;
+        command->character.is_symbol = true;
+        command->character.with_control = true;
+
+        command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_first);
+        command->check_mask = editor_character_mask_all;
+        command->character.code = mop_character_symbol_up;
+        command->character.is_symbol = true;
+        command->character.with_control = true;
 
         // search only
 

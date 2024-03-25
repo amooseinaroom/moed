@@ -1,23 +1,36 @@
 @echo off
 
-set hot_code_reloading=1
+set debug=1
+set enable_hot_reloading=1
 
 rem set exe name
 set name="moed"
 set source=%cd%\source\main.c
 set includes=/I %cd%/molib/source
-set options=/nologo /Zi /Od /DEBUG /MTd %includes% /Denable_hot_reloading=%hot_code_reloading%
-rem set options=/nologo /Zi /DEBUG /O2 /MT %includes% /Denable_hot_reloading=%hot_code_reloading%
 set link_options=/link /INCREMENTAL:NO
+
+if %debug%==1 (
+    echo debug
+    set options=/nologo /Zi /Od /DEBUG /MTd %includes% /Dmo_enable_hot_reloading=%enable_hot_reloading%
+) else (
+    echo release
+    set options=/nologo /Zi /DEBUG /O2 /MT %includes% /Dmo_enable_hot_reloading=%enable_hot_reloading%
+)
 
 if not exist build mkdir build
 
 pushd build
 
 cl /Fo%name% /TP /c %source% %options%
-cl /Fehot     %name%.obj %options% /LD %link_options% /PDB:hot_dll.pdb
-cl /Fe%name%_hot %name%.obj %options%     %link_options%
-copy %name%_hot.exe %name%.exe >NUL 2>NUL
+
+if %enable_hot_reloading%==1 (
+    echo hot reloading
+    cl /Fehot        %name%.obj %options% /LD %link_options% /PDB:hot_dll.pdb
+    cl /Fe%name%_hot %name%.obj %options%     %link_options%
+    copy %name%_hot.exe %name%.exe >NUL 2>NUL
+) else (
+    cl /Fe%name% %name%.obj %options% %link_options%
+)
 
 popd
 
