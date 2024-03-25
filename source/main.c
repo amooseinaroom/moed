@@ -365,11 +365,11 @@ mop_hot_update_signature
                 f32 min_x = draw_cursor.position.x;
                 moui_box2 edit_box = moui_used_box_begin(ui);
 
-                editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->file_open_buffer);
+                editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->file_open_relative_path);
 
                 draw_single_line_text(ui, font,  &draw_cursor, &buffer, program->settings);
 
-                editor_buffer255_edit_end(editor, &editor->file_open_buffer, buffer);
+                editor_buffer255_edit_end(editor, &editor->file_open_relative_path, buffer);
 
                 moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "\n");
 
@@ -383,7 +383,8 @@ mop_hot_update_signature
                 draw_cursor.position.y -= inset;
 
                 editor_file_search *file_search  = &editor->file_search;
-                editor_file_search_filter filter = editor_file_search_filter_get(buffer.text);
+                editor_file_search_filter filter;
+                editor_file_search_filter_get(&filter, platform, buffer.text);
 
                 assert(file_search->result_count >= file_search->display_offset);
 

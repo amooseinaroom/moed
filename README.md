@@ -5,7 +5,6 @@ simple minimal text editor for programming using C and molib
 
 - detect and preserve line endings (currently saves buffers out with \r\n line endings)
 - search
-  - reverse search
   - open buffer search
 - replace
 - selection
@@ -47,7 +46,8 @@ The editor automatically inserts and removes tabs when adding or removing lines 
   - ctrl+return : open file or all files in directory (not recursive)
   - escape : close file open mode
 - ctrl+F : toggle search buffer mode
-  - down : search next    
+  - down : search next
+  - up : search previous
   - return : accept current position and close search buffer mode
   - ctrl+return : accept current position and close search buffer mode
   - escape : move to start of the search and close search buffer mode

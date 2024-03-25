@@ -110,6 +110,7 @@ typedef enum
     editor_focus_buffer,
     editor_focus_file_search,
     editor_focus_search,
+    editor_focus_search_replace,
 
     editor_focus_count,
 } editor_focus;
@@ -131,7 +132,7 @@ typedef struct
 
 typedef struct
 {
-    mop_file_search_result results[256];
+    mop_file_search_result results[256]; // filepaths are absolute paths
     u32                    result_count;
 
     u32 selected_index;
@@ -155,7 +156,7 @@ typedef struct
     editor_focus focus;
     editor_focus mode;
 
-    editor_buffer255   file_open_buffer;
+    editor_buffer255   file_open_relative_path;
     editor_file_search file_search;
 
     editor_buffer255 search_buffer;
@@ -171,8 +172,9 @@ typedef struct
 
 typedef struct
 {
+    u8 buffer[mop_path_max_count];
     string search_directory;
-    string filter;
+    string pattern;
 } editor_file_search_filter;
 
 typedef struct
@@ -254,7 +256,7 @@ editor_buffer_move_right_within_line_signature;
 #define editor_buffer_count_right_spaces_signature u32 editor_buffer_count_right_spaces(editor_state *editor, editor_editable_buffer *buffer)
 editor_buffer_count_right_spaces_signature;
 
-#define editor_file_search_filter_get_signature editor_file_search_filter editor_file_search_filter_get(string path)
+#define editor_file_search_filter_get_signature void editor_file_search_filter_get(editor_file_search_filter *filter, mop_platform *platform, string relative_path)
 editor_file_search_filter_get_signature;
 
 #define editor_file_search_filter_check_signature editor_file_search_filter_result editor_file_search_filter_check(editor_file_search_filter filter, mop_file_search_result result)
@@ -262,6 +264,15 @@ editor_file_search_filter_check_signature;
 
 #define editor_search_forward_signature string editor_search_forward(editor_state *editor, string text, u32 offset, string pattern)
 editor_search_forward_signature;
+
+#define editor_search_backward_signature string editor_search_backward(editor_state *editor, string text, u32 offset, string pattern)
+editor_search_backward_signature;
+
+#define editor_get_absolute_path_signature string editor_get_absolute_path(u8_array buffer, mop_platform *platform, string relative_path)
+editor_get_absolute_path_signature;
+
+#define editor_get_relative_path_signature string editor_get_relative_path(u8_array buffer, mop_platform *platform, string absolute_path)
+editor_get_relative_path_signature;
 
 editor_command * editor_add_command(editor_state *editor, editor_focus focus, editor_command_tag tag)
 {
@@ -411,7 +422,7 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
     editor->visible_line_count           = visible_line_count;
     editor->visible_line_character_count = visible_line_character_count;
 
-    editor->file_open_buffer.has_changed = false;
+    editor->file_open_relative_path.has_changed = false;
     editor->search_buffer.has_changed = false;
 
     mop_character_array characters = mop_get_characters(platform);
@@ -449,7 +460,7 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
             case editor_focus_file_search:
             {
-                buffer = editor_buffer255_edit_begin(editor, &editor->file_open_buffer);
+                buffer = editor_buffer255_edit_begin(editor, &editor->file_open_relative_path);
             } break;
 
             case editor_focus_search:
@@ -699,7 +710,7 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
             case editor_focus_file_search:
             {
-                editor_buffer255_edit_end(editor, &editor->file_open_buffer, buffer);
+                editor_buffer255_edit_end(editor, &editor->file_open_relative_path, buffer);
             } break;
 
             case editor_focus_search:
@@ -715,11 +726,14 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
     {
         case editor_focus_file_search:
         {
-            if (!editor->file_open_buffer.has_changed)
+            if (!editor->file_open_relative_path.has_changed)
                 break;
 
             editor_file_search *file_search = &editor->file_search;
-            editor_file_search_filter filter = editor_file_search_filter_get(string255_to_string(editor->file_open_buffer.text));
+            mos_string search_path = string255_to_string(editor->file_open_relative_path.text);
+
+            editor_file_search_filter filter;
+            editor_file_search_filter_get(&filter, platform, search_path);
             file_search->result_count   = 0;
             file_search->selected_index = 0;
             file_search->display_offset = 0;
@@ -736,9 +750,11 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
                 if (!filter_result.ok)
                     continue;
 
-                file_search->results[file_search->result_count] = result;
-                file_search->results[file_search->result_count].filepath.base = file_search->results[file_search->result_count].buffer;
+                mop_file_search_result *search_result = &file_search->results[file_search->result_count];
                 file_search->result_count += 1;
+
+                *search_result = result;
+                search_result->filepath.base = search_result->buffer;
             }
         } break;
 
@@ -887,7 +903,7 @@ editor_command_execute_signature
             {
                 editor->mode  = editor_focus_file_search;
                 editor->focus = editor_focus_file_search;
-                editor->file_open_buffer.has_changed = true; // force a search
+                editor->file_open_relative_path.has_changed = true; // force a search
             }
         } break;
 
@@ -938,6 +954,12 @@ editor_command_execute_signature
                         if (at.base)
                             active_buffer->cursor_offset = (u32) (at.base - text.base);
                     }
+                    else
+                    {
+                        string at = editor_search_backward(editor, text, active_buffer->cursor_offset, pattern);
+                        if (at.base)
+                            active_buffer->cursor_offset = (u32) (at.base - text.base);
+                    }
                 } break;
 
                 cases_complete(editor->focus);
@@ -953,36 +975,42 @@ editor_command_execute_signature
                 {
                     editor_file_search *file_search = &editor->file_search;
 
-                    string path = string255_to_string(editor->file_open_buffer.text);
+                    string255 relative_path255 = editor->file_open_relative_path.text;
                     if (file_search->result_count)
                     {
                         assert(file_search->selected_index < file_search->result_count);
-                        path = file_search->results[file_search->selected_index].filepath;
+                        string absolute_path = file_search->results[file_search->selected_index].filepath;
+
+                        string buffer = { relative_path255.base, carray_count(relative_path255.base) };
+                        string result = editor_get_relative_path(buffer, platform, absolute_path);
+                        relative_path255 = string255_from_string(result);
                     }
 
-                    if (mop_path_is_directory(platform, path))
+                    string relative_path = string255_to_string(relative_path255);
+
+                    if (mop_path_is_directory(platform, relative_path))
                     {
+                        if (relative_path.count)
+                        {
+                            assert(relative_path.base[relative_path.count - 1] != '/');
+                            assert(relative_path.count + 1 <= carray_count(relative_path255.base));
+                            relative_path.base[relative_path.count] = '/';
+                            relative_path.count += 1;
+                        }
+
                         // open all files in directory
                         if (command_tag == editor_command_tag_select_accept_all)
                         {
-                            assert(path.count + 1 <= carray_count(editor->file_open_buffer.text.base));
-                            path.base[path.count] = '/';
-                            path.count += 1;
-
-                            editor->active_buffer_index = editor_directory_load_all_files(platform, editor, path);
+                            editor->active_buffer_index = editor_directory_load_all_files(platform, editor, relative_path);
 
                             editor->mode  = editor_focus_buffer;
                             editor->focus = editor_focus_buffer;
                         }
                         else // push into directory
                         {
-                            editor_buffer255 *buffer = &editor->file_open_buffer;
+                            editor_buffer255 *buffer = &editor->file_open_relative_path;
 
-                            buffer->text = string255_from_string(path);
-                            assert(buffer->text.count < carray_count(buffer->text.base));
-                            assert(buffer->text.base[buffer->text.count - 1] != '/');
-                            buffer->text.base[buffer->text.count] = '/';
-                            buffer->text.count += 1;
+                            buffer->text = string255_from_string(relative_path);
                             buffer->cursor_offset = buffer->text.count;
                             buffer->has_changed = true;
                         }
@@ -991,7 +1019,7 @@ editor_command_execute_signature
                     {
                         // TODO: handle creating file with unsupported extension
 
-                        u32 buffer_index = editor_buffer_find_or_add(editor, path, true);
+                        u32 buffer_index = editor_buffer_find_or_add(editor, relative_path, true);
                         editor_buffer_load_file(platform, editor, buffer_index);
 
                         editor->active_buffer_index = buffer_index;
@@ -1023,22 +1051,25 @@ editor_command_execute_signature
 
                     assert(file_search->selected_index < file_search->result_count);
                     mop_file_search_result result = file_search->results[file_search->selected_index];
-                    string path = result.filepath;
 
-                    editor_buffer255 *buffer = &editor->file_open_buffer;
+                    {
+                        string buffer = { editor->file_open_relative_path.text.base, carray_count(editor->file_open_relative_path.text.base) };
+                        string relative_path = editor_get_relative_path(buffer, platform, result.filepath);
+                        editor->file_open_relative_path.text = string255_from_string(relative_path);
+                    }
 
-                    buffer->text = string255_from_string(path);
+                    string255 *text = &editor->file_open_relative_path.text;
 
                     if (!result.is_parent_directory && result.is_directory)
                     {
-                        assert(buffer->text.count < carray_count(buffer->text.base));
-                        assert(buffer->text.base[buffer->text.count - 1] != '/');
-                        buffer->text.base[buffer->text.count] = '/';
-                        buffer->text.count += 1;
+                        assert(text->count < carray_count(text->base));
+                        assert(text->base[text->count - 1] != '/');
+                        text->base[text->count] = '/';
+                        text->count += 1;
                     }
 
-                    buffer->cursor_offset = buffer->text.count;
-                    buffer->has_changed = true;
+                    editor->file_open_relative_path.cursor_offset = text->count;
+                    editor->file_open_relative_path.has_changed   = true;
                 } break;
 
                 cases_complete(editor->focus);
@@ -1053,7 +1084,8 @@ editor_command_execute_signature
                 {
                     editor_file_search *file_search = &editor->file_search;
 
-                    editor_buffer255 *buffer = &editor->file_open_buffer;
+                    editor_buffer255 *buffer = &editor->file_open_relative_path;
+
                     string path = string255_to_string(buffer->text);
                     mos_split_path_result split = mos_split_path(path);
 
@@ -1431,14 +1463,104 @@ editor_buffer_count_right_spaces_signature
      return space_count;
 }
 
+editor_get_absolute_path_signature
+{
+    string working_directory = mop_get_working_directory(platform);
+
+    mos_string_buffer builder = mos_buffer_from_memory(buffer.base, buffer.count);
+
+    mos_write(&builder, "%.*s/", fs(working_directory));
+
+    while (relative_path.count)
+    {
+        if (mos_try_skip(&relative_path, s("..")))
+        {
+            // remove '/'
+            if (builder.used_count)
+                builder.used_count -= 1;
+
+            while (builder.used_count && (builder.base[builder.used_count - 1] != '/'))
+                builder.used_count -= 1;
+
+            mos_try_skip(&relative_path, s("/"));
+        }
+        else
+        {
+            mos_string directory = mos_skip_until_pattern_or_end(&relative_path, s("/"));
+            mos_write(&builder, "%.*s", fs(directory));
+
+            if (mos_try_skip(&relative_path, s("/")))
+                mos_write(&builder, "/");
+        }
+    }
+
+    mos_string absolute_path = mos_buffer_to_string(builder);
+    return absolute_path;
+}
+
+editor_get_relative_path_signature
+{
+    string working_directory = mop_get_working_directory(platform);
+
+    mos_string_buffer builder = mos_buffer_from_memory(buffer.base, buffer.count);
+
+    string left  = working_directory;
+    string right = absolute_path;
+    while (left.count && right.count)
+    {
+        string left_test = left;
+        string right_test = right;
+        string left_name  = mos_skip_until_pattern_or_end(&left_test, s("/"));
+        string right_name = mos_skip_until_pattern_or_end(&right_test, s("/"));
+
+        if (!mos_are_equal(left_name, right_name))
+            break;
+
+        if (mos_try_skip(&left_test, s("/")) && right_test.count && !mos_try_skip(&right_test, s("/")))
+            break;
+
+        left  = left_test;
+        right = right_test;
+    }
+
+    if (!left.count && (!right.count || mos_try_skip(&right, s("/"))))
+    {
+        mos_write(&builder, "%.*s", fs(right));
+    }
+    else
+    {
+        while (left.count)
+        {
+            mos_skip_until_pattern_or_end(&left, s("/"));
+            mos_try_skip(&left, s("/"));
+
+            if (builder.used_count)
+                mos_write(&builder, "/..");
+            else
+                mos_write(&builder, "..");
+        }
+
+        if (right.count)
+        {
+            assert(builder.used_count);
+            mos_write(&builder, "/%.*s", fs(right));
+        }
+    }
+
+    mos_string relative_path = mos_buffer_to_string(builder);
+    return relative_path;
+}
+
 editor_file_search_filter_get_signature
 {
-    mos_split_path_result split = mos_split_path(path);
+    mos_string search_path = editor_get_absolute_path(sl(u8_array) { filter->buffer, carray_count(filter->buffer) }, platform, relative_path);
 
-    string filter = sl(string) { split.name.base, (usize) (path.base + path.count - split.name.base) };
+    mos_split_path_result split = mos_split_path(search_path);
 
-    string search_directory = split.directory;
-    return sl(editor_file_search_filter) { search_directory, filter };
+    string pattern = sl(string) { split.name.base, (usize) (search_path.base + search_path.count - split.name.base) };
+
+    filter->search_directory = split.directory;
+    filter->pattern = pattern;
 }
 
 editor_file_search_filter_check_signature
@@ -1454,8 +1576,8 @@ editor_file_search_filter_check_signature
             mos_advance(&suffix, 1);
     }
 
-    string match = mos_contains_pattern(suffix, filter.filter);
-    if (filter.filter.count && !match.base)
+    string match = mos_contains_pattern(suffix, filter.pattern);
+    if (filter.pattern.count && !match.base)
         return sl(editor_file_search_filter_result) { string_empty, string_empty, false };
 
     return sl(editor_file_search_filter_result) { suffix, match, true };
@@ -1469,6 +1591,19 @@ editor_search_forward_signature
     {
         string left = { text.base, offset };
         at = mos_contains_pattern(left, pattern);
+    }
+
+    return at;
+}
+
+editor_search_backward_signature
+{
+    string left = { text.base, offset };
+    string at = mos_contains_pattern_from_end(left, pattern);
+    if (!at.base)
+    {
+        string right = mos_remaining_substring(text, offset);
+        at = mos_contains_pattern_from_end(right, pattern);
     }
 
     return at;
