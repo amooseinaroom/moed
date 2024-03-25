@@ -25,16 +25,17 @@ simple minimal text editor for programming using C and molib
 
 You can launch the editor in the command line to specify what relative files and directories you want to be loaded at start.
 This will load all files inside directories without recursion.
+Warning: Absolut file paths are currently not properly supported.
 
 If you don't give any arguments via command line, the editor does not load any files at start.
 
 Some examples:
 - For instance if you want to load all files in the current directory do:
-`moed.exe .`
-- If you want to load all files in the current directory and the sub directory `source`:
-`moed.exe . source`
-- If you want to load all files in the current directory, the sub directory `source` and the specific file `molib\source\mo_string.h`
-`moed.exe . source molib\source\mo_string.h`
+    - `moed.exe .`
+- If you want to load all files in the current directory and the sub directory `source` do:
+    - `moed.exe . source`
+- If you want to load all files in the current directory, the sub directory `source` and the specific file `molib/source/mo_string.h` do:
+    - `moed.exe . source molib/source/mo_string.h`
 
 # key bindings
 
@@ -53,6 +54,8 @@ The editor automatically inserts and removes tabs when adding or removing lines 
 - in search or search and replace buffer mode
   - down : search next
   - up : search previous
+  - ctrl+down : search last
+  - ctrl+up : search first
   - escape : move to start of the search or last replaced position and close search buffer mode
 - ctrl+F : toggle search buffer mode
   - return : accept current position and close search buffer mode
