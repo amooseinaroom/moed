@@ -86,7 +86,10 @@ const rgba background_color = { 0.1f, 0.1f, 0.1f, 1.0f };
 const rgba text_color       = { 0.9f, 0.9f, 0.9f, 1.0f };
 const rgba text_color_match = { 1.0f, 0.4f, 0.1f, 1.0f };
 const rgba caption_color    = { 0.3f, 0.3f, 1.0f, 1.0f };
-const rgba caret_color = { 0.2f, 1.0f, 0.2f, 0.5f };
+const rgba caret_color      = { 0.2f, 1.0f, 0.2f, 0.5f };
+const rgba edit_focus_color = { 0.6f, 0.4f, 0.1f, 1.0f };
+
+f32 editor_box_inset = 4;
 
 typedef enum
 {
@@ -98,6 +101,10 @@ typedef enum
 
     draw_layer_count,
 } draw_layer;
+
+
+#define draw_single_line_text_edit_signature void draw_single_line_text_edit(moui_state *ui, program_state *program, moui_simple_font font, moui_text_cursor *draw_cursor, editor_editable_buffer *buffer, b8 is_active)
+draw_single_line_text_edit_signature;
 
 #define draw_single_line_text_signature void draw_single_line_text(moui_state *ui, moui_simple_font font, moui_text_cursor *draw_cursor, editor_editable_buffer *buffer, editor_settings settings)
 draw_single_line_text_signature;
@@ -333,8 +340,7 @@ mop_hot_update_signature
 
     moui_box(ui, draw_layer_background, moui_to_quad_colors(background_color), sl(box2) { 0, 0, ui_size });
 
-    f32 inset = 4;
-    moui_text_cursor draw_cursor = moui_text_cursor_at_top(font, sl(moui_vec2) { inset + font.left_margin, ui_size.y - inset });
+    moui_text_cursor draw_cursor = moui_text_cursor_at_top(font, sl(moui_vec2) { editor_box_inset + font.left_margin, ui_size.y - editor_box_inset });
     // moui_printf(ui, font, 0, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "fps: %f\n", 1.0f / platform->delta_seconds);
 
     editor_buffer *active_buffer = editor_active_buffer_get(editor);
@@ -342,7 +348,7 @@ mop_hot_update_signature
     {
         moui_box2 used_box = moui_used_box_begin(ui);
 
-        draw_cursor.position.x += inset;
+        draw_cursor.position.x += editor_box_inset;
         draw_cursor.line_start_x = draw_cursor.position.x;
 
         string title = string255_to_string(active_buffer->title);
@@ -354,33 +360,19 @@ mop_hot_update_signature
         if (active_buffer->has_changed)
             moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 0.5f, 0.1f, 1.0f }, &draw_cursor, " *");
 
-        moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "\n");
+        moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "   [mode: %.*s, focus: %.*s]\n", fs(editor_focus_names[editor->mode]), fs(editor_focus_names[editor->focus]));
 
         switch (editor->mode)
         {
             case editor_focus_file_search:
             {
-                moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "Open File: ");
-
-                f32 min_x = draw_cursor.position.x;
-                moui_box2 edit_box = moui_used_box_begin(ui);
+                moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "Search: ");
 
                 editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->file_open_relative_path);
 
-                draw_single_line_text(ui, font,  &draw_cursor, &buffer, program->settings);
+                draw_single_line_text_edit(ui, program, font, &draw_cursor, &buffer, editor->focus == editor_focus_file_search);
 
                 editor_buffer255_edit_end(editor, &editor->file_open_relative_path, buffer);
-
-                moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "\n");
-
-                edit_box = moui_used_box_end(ui, edit_box);
-                edit_box.min.x = min_x - inset; // some room for caret
-                edit_box.max.x = ui_size.x - inset * 2;
-                edit_box = box2_grow(edit_box, 2);
-                moui_rounded_box(ui, draw_layer_caption_inset, moui_to_quad_colors(background_color), edit_box, 4);
-
-                ui->renderer.used_box.min.y -= inset - 2;
-                draw_cursor.position.y -= inset;
 
                 editor_file_search *file_search  = &editor->file_search;
                 editor_file_search_filter filter;
@@ -421,8 +413,8 @@ mop_hot_update_signature
                     if (i + file_search->display_offset == file_search->selected_index)
                     {
                         box2 box;
-                        box.min.x = inset * 2; // some room for caret
-                        box.max.x = ui_size.x - inset * 2;
+                        box.min.x = editor_box_inset * 2; // some room for caret
+                        box.max.x = ui_size.x - editor_box_inset * 2;
                         box.min.y = start.y - font.bottom_to_line;
                         box.max.y = start.y + font.line_to_top;
                         box = box2_grow(box, 2);
@@ -432,40 +424,38 @@ mop_hot_update_signature
             } break;
 
             case editor_focus_search:
+            case editor_focus_search_replace:
             {
                 moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "Search: ");
 
-                f32 min_x = draw_cursor.position.x;
-                moui_box2 edit_box = moui_used_box_begin(ui);
-
                 editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->search_buffer);
 
-                draw_single_line_text(ui, font,  &draw_cursor, &buffer, program->settings);
+                draw_single_line_text_edit(ui, program, font, &draw_cursor, &buffer, editor->focus == editor_focus_search);
 
                 editor_buffer255_edit_end(editor, &editor->search_buffer, buffer);
 
-                moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "\n");
+                if (editor->mode == editor_focus_search_replace)
+                {
+                    moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, &draw_cursor, "Replace: ");
 
-                edit_box = moui_used_box_end(ui, edit_box);
-                edit_box.min.x = min_x - inset; // some room for caret
-                edit_box.max.x = ui_size.x - inset * 2;
-                edit_box = box2_grow(edit_box, 2);
-                moui_rounded_box(ui, draw_layer_caption_inset, moui_to_quad_colors(background_color), edit_box, 4);
+                    editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->search_replace_buffer);
 
-                ui->renderer.used_box.min.y -= inset - 2;
-                draw_cursor.position.y -= inset;
+                    draw_single_line_text_edit(ui, program, font, &draw_cursor, &buffer, editor->focus == editor_focus_search_replace);
+
+                    editor_buffer255_edit_end(editor, &editor->search_replace_buffer, buffer);
+                }
             } break;
         }
 
         used_box = moui_used_box_end(ui, used_box);
-        used_box.min.x = inset;
-        used_box.max.x = ui_size.x - inset;
+        used_box.min.x = editor_box_inset;
+        used_box.max.x = ui_size.x - editor_box_inset;
         used_box = box2_grow(used_box, 2);
         moui_rounded_box(ui, draw_layer_caption, moui_to_quad_colors(caption_color), used_box, 4);
 
-        draw_cursor.position.x -= inset;
+        draw_cursor.position.x -= editor_box_inset;
         draw_cursor.line_start_x = draw_cursor.position.x;
-        draw_cursor.position.y -= inset;
+        draw_cursor.position.y -= editor_box_inset;
     }
 
     {
@@ -663,3 +653,31 @@ draw_text_advance_signature
         moui_text_advance_line(iterator);
 }
 
+draw_single_line_text_edit_signature
+{
+    editor_state *editor = &program->editor;
+
+    f32 min_x = draw_cursor->position.x;
+    moui_box2 edit_box = moui_used_box_begin(ui);
+
+    // editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->search_buffer);
+
+    draw_single_line_text(ui, font,  draw_cursor, buffer, program->settings);
+
+    //editor_buffer255_edit_end(editor, &editor->search_buffer, buffer);
+
+    moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, draw_cursor, "\n");
+
+    edit_box = moui_used_box_end(ui, edit_box);
+    edit_box.min.x = min_x - editor_box_inset; // some room for caret
+    edit_box.max.x = ui->renderer.canvas_size.x - editor_box_inset * 2;
+    edit_box = box2_grow(edit_box, 2);
+
+    rgba color = background_color;
+    if (is_active)
+        color = edit_focus_color;
+    moui_rounded_box(ui, draw_layer_caption_inset, moui_to_quad_colors(color), edit_box, 4);
+
+    ui->renderer.used_box.min.y -= editor_box_inset - 2;
+    draw_cursor->position.y -= editor_box_inset;
+}

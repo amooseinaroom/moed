@@ -96,7 +96,9 @@ typedef enum
     editor_command_tag_buffer_save,
     editor_command_tag_reload_buffer,
 
-    editor_command_tag_search_toggle,
+    editor_command_tag_focus_buffer,
+    editor_command_tag_focus_search,
+    editor_command_tag_focus_search_replace,
 
     editor_command_tag_buffer_next,
     editor_command_tag_buffer_previous,
@@ -131,19 +133,18 @@ typedef union
 
 const editor_character_mask editor_character_mask_all = sl(editor_character_mask){ 0xff };
 
-typedef enum
-{
-    editor_focus_buffer,
-    editor_focus_file_search,
-    editor_focus_search,
-    editor_focus_search_replace,
+#define editor_focus_list(macro, ...) \
+    macro(buffer, __VA_ARGS__) \
+    macro(file_search, __VA_ARGS__) \
+    macro(search, __VA_ARGS__) \
+    macro(search_replace, __VA_ARGS__) \
 
-    editor_focus_count,
-} editor_focus;
+mo_enum_list(editor_focus,         editor_focus_list);
+mo_string_list(editor_focus_names, editor_focus_list);
 
 typedef struct
 {
-    editor_focus          focus;
+    u32                   focus_mask;
     editor_command_tag    tag;
     editor_character_mask check_mask;
     mop_character         character;
@@ -180,13 +181,15 @@ typedef struct
     editor_command commands[512];
     u32            command_count;
 
-    editor_focus focus;
     editor_focus mode;
+    editor_focus focus;
+    editor_focus previous_focus; // when focusing buffer
 
     editor_buffer255   file_open_relative_path;
     editor_file_search file_search;
 
     editor_buffer255 search_buffer;
+    editor_buffer255 search_replace_buffer;
     u32              search_start_cursor_offset;
 
     u32 visible_line_count_top;
@@ -301,17 +304,11 @@ editor_get_absolute_path_signature;
 #define editor_get_relative_path_signature string editor_get_relative_path(u8_array buffer, mop_platform *platform, string absolute_path)
 editor_get_relative_path_signature;
 
-editor_command * editor_add_command(editor_state *editor, editor_focus focus, editor_command_tag tag)
-{
-    editor_command *command = &editor->commands[editor->command_count];
-    *command = sl(editor_command) {0};
-    editor->command_count += 1;
+#define editor_command_add_signature editor_command * editor_command_add(editor_state *editor, u32 focus_mask, editor_command_tag tag)
+editor_command_add_signature;
 
-    command->focus = focus;
-    command->tag   = tag;
-
-    return command;
-}
+#define editor_mode_set_signature void editor_mode_set(editor_state *editor, editor_focus mode)
+editor_mode_set_signature;
 
 const string editor_file_extension_list_path = sc("moed_file_extensions.txt");
 
@@ -390,28 +387,38 @@ void editor_init(editor_state *editor, mop_platform *platform)
 
     // editor_focus_buffer
     {
-        editor_command *command = editor_add_command(editor, editor_focus_buffer, editor_command_tag_buffer_save);
+        editor_command *command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_save);
         command->character.code = 'S';
         command->check_mask = editor_character_mask_all;
         command->character.with_control = true;
 
-        command = editor_add_command(editor, editor_focus_buffer, editor_command_tag_file_open);
+        command = editor_command_add(editor, ~0, editor_command_tag_focus_buffer);
+        command->character.code = ' ';
+        command->check_mask = editor_character_mask_all;
+        command->character.with_control = true;
+
+        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_file_search), editor_command_tag_file_open);
         command->check_mask = editor_character_mask_all;
         command->character.code = 'P';
         command->character.with_control = true;
 
-        command = editor_add_command(editor, editor_focus_buffer, editor_command_tag_search_toggle);
+        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_search) | flag32(editor_focus_search_replace), editor_command_tag_focus_search);
         command->check_mask = editor_character_mask_all;
         command->character.code = 'F';
         command->character.with_control = true;
 
-        command = editor_add_command(editor, editor_focus_buffer, editor_command_tag_buffer_next);
+        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_search) | flag32(editor_focus_search_replace), editor_command_tag_focus_search_replace);
+        command->check_mask = editor_character_mask_all;
+        command->character.code = 'R';
+        command->character.with_control = true;
+
+        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_next);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_tabulator;
         command->character.is_symbol = true;
         command->character.with_control = true;
 
-        command = editor_add_command(editor, editor_focus_buffer, editor_command_tag_buffer_previous);
+        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_previous);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_tabulator;
         command->character.is_symbol = true;
@@ -419,80 +426,87 @@ void editor_init(editor_state *editor, mop_platform *platform)
         command->character.with_control = true;
     }
 
-    // editor_focus_search
+    // editor_focus_search and editor_focus_search_replace
     {
-        editor_command *command = editor_add_command(editor, editor_focus_search, editor_command_tag_search_toggle);
-        command->character.code = 'F';
-        command->check_mask = editor_character_mask_all;
-        command->character.with_control = true;
+        u32 focus_search_or_replace_mask = flag32(editor_focus_search) | flag32(editor_focus_search_replace);
 
-        command = editor_add_command(editor, editor_focus_search, editor_command_tag_select_next);
+        editor_command *command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_next);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_down;
         command->character.is_symbol = true;
 
-        command = editor_add_command(editor, editor_focus_search, editor_command_tag_select_previous);
+        command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_previous);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_up;
         command->character.is_symbol = true;
 
-        command = editor_add_command(editor, editor_focus_search, editor_command_tag_select_accept);
+        command = editor_command_add(editor, flag32(editor_focus_buffer) | focus_search_or_replace_mask, editor_command_tag_select_cancel);
+        command->check_mask = editor_character_mask_all;
+        command->character.code = mop_character_symbol_escape;
+        command->character.is_symbol = true;
+
+        // search only
+
+        command = editor_command_add(editor, flag32(editor_focus_search), editor_command_tag_select_accept);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_return;
         command->character.is_symbol = true;
 
-        command = editor_add_command(editor, editor_focus_search, editor_command_tag_select_accept_all);
+        command = editor_command_add(editor, flag32(editor_focus_search), editor_command_tag_select_accept_all);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_return;
         command->character.is_symbol = true;
         command->character.with_control = true;
 
-        command = editor_add_command(editor, editor_focus_search, editor_command_tag_select_cancel);
+        // replace only
+
+        command = editor_command_add(editor, flag32(editor_focus_search_replace), editor_command_tag_select_accept);
         command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_escape;
+        command->character.code = mop_character_symbol_return;
         command->character.is_symbol = true;
+
+        command = editor_command_add(editor, flag32(editor_focus_search_replace), editor_command_tag_select_accept_all);
+        command->check_mask = editor_character_mask_all;
+        command->character.code = mop_character_symbol_return;
+        command->character.is_symbol = true;
+        command->character.with_control = true;
     }
 
     // editor_focus_file_search
     {
-        editor_command *command = editor_add_command(editor, editor_focus_file_search, editor_command_tag_file_open);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = 'P';
-        command->character.with_control = true;
-
-        command = editor_add_command(editor, editor_focus_file_search, editor_command_tag_select_next);
+        editor_command *command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_next);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_down;
         command->character.is_symbol = true;
 
-        command = editor_add_command(editor, editor_focus_file_search, editor_command_tag_select_previous);
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_previous);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_up;
         command->character.is_symbol = true;
 
-        command = editor_add_command(editor, editor_focus_file_search, editor_command_tag_select_push);
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_push);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_tabulator;
         command->character.is_symbol = true;
 
-        command = editor_add_command(editor, editor_focus_file_search, editor_command_tag_select_pop);
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_pop);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_tabulator;
         command->character.is_symbol = true;
         command->character.with_shift = true;
 
-        command = editor_add_command(editor, editor_focus_file_search, editor_command_tag_select_accept);
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_accept);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_return;
         command->character.is_symbol = true;
 
-        command = editor_add_command(editor, editor_focus_file_search, editor_command_tag_select_accept_all);
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_accept_all);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_return;
         command->character.is_symbol = true;
         command->character.with_control = true;
 
-        command = editor_add_command(editor, editor_focus_file_search, editor_command_tag_select_cancel);
+        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_file_search), editor_command_tag_select_cancel);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_escape;
         command->character.is_symbol = true;
@@ -517,13 +531,14 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
         mop_character character = characters.base[character_index];
 
+        // TODO: is this still valid?
         assert((editor->mode != editor_focus_buffer) || (editor->mode == editor->focus));
 
         b8 found_command = false;
         for (u32 command_index = 0; command_index < editor->command_count; command_index++)
         {
             editor_command command = editor->commands[command_index];
-            if ((command.focus == editor->focus) && (command.character.code == character.code) && ((character.mask & command.check_mask.value) == command.character.mask))
+            if ((command.focus_mask & flag32(editor->focus)) && (command.character.code == character.code) && ((character.mask & command.check_mask.value) == command.character.mask))
             {
                 found_command = true;
                 editor_command_execute(editor, command.tag, platform);
@@ -535,7 +550,7 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
             continue;
 
         editor_editable_buffer buffer;
-        switch (editor->mode)
+        switch (editor->focus)
         {
             case editor_focus_buffer:
             {
@@ -552,14 +567,18 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
                 buffer = editor_buffer255_edit_begin(editor, &editor->search_buffer);
             } break;
 
-            cases_complete(editor->mode);
+            case editor_focus_search_replace:
+            {
+                buffer = editor_buffer255_edit_begin(editor, &editor->search_replace_buffer);
+            } break;
+
+            cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
         }
 
         if (!character.is_symbol)
         {
             mos_utf8_encoding encoding = mos_encode_utf8(character.code);
             assert(encoding.count);
-
 
             editor_insert(editor, &buffer, buffer.cursor_offset, sl(string) { encoding.base, encoding.count });
             buffer.cursor_offset += encoding.count;
@@ -785,7 +804,7 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
             }
         }
 
-        switch (editor->mode)
+        switch (editor->focus)
         {
             case editor_focus_buffer:
             {
@@ -802,11 +821,16 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
                 editor_buffer255_edit_end(editor, &editor->search_buffer, buffer);
             } break;
 
-            cases_complete(editor->mode);
+            case editor_focus_search_replace:
+            {
+                editor_buffer255_edit_end(editor, &editor->search_replace_buffer, buffer);
+            } break;
+
+            cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
         }
     }
 
-    switch (editor->mode)
+    switch (editor->focus)
     {
         case editor_focus_file_search:
         {
@@ -935,6 +959,18 @@ editor_file_extension_check_signature
     return false;
 }
 
+editor_command_add_signature
+{
+    editor_command *command = &editor->commands[editor->command_count];
+    *command = sl(editor_command) {0};
+    editor->command_count += 1;
+
+    command->focus_mask = focus_mask;
+    command->tag        = tag;
+
+    return command;
+}
+
 editor_command_execute_signature
 {
     switch (command_tag)
@@ -985,37 +1021,49 @@ editor_command_execute_signature
             editor->memory.used_count = tmemory_frame;
         } break;
 
+        case editor_command_tag_focus_buffer:
+        {
+            if (editor->focus == editor_focus_buffer)
+            {
+                editor->focus = editor->previous_focus;
+            }
+            else
+            {
+                editor->previous_focus = editor->focus;
+                editor->focus          = editor_focus_buffer;
+            }
+        } break;
+
         case editor_command_tag_file_open:
         {
             if (editor->mode == editor_focus_file_search)
             {
-                editor->mode  = editor_focus_buffer;
-                editor->focus = editor_focus_buffer;
+                editor_mode_set(editor, editor_focus_buffer);
             }
             else
             {
-                editor->mode  = editor_focus_file_search;
-                editor->focus = editor_focus_file_search;
+                editor_mode_set(editor, editor_focus_file_search);
                 editor->file_open_relative_path.has_changed = true; // force a search
             }
         } break;
 
-        case editor_command_tag_search_toggle:
+        case editor_command_tag_focus_search:
+        case editor_command_tag_focus_search_replace:
         {
-            if (editor->mode == editor_focus_search)
-            {
-                editor->mode  = editor_focus_buffer;
-                editor->focus = editor_focus_buffer;
-            }
-            else
-            {
-                editor->mode  = editor_focus_search;
-                editor->focus = editor_focus_search;
-                editor->search_buffer.has_changed = true; // force a search
+            editor_focus target_focus = (editor_focus) (editor_focus_search + command_tag - editor_command_tag_focus_search);
 
+            if (editor->mode == editor_focus_buffer)
+            {
                 editor_buffer *active_buffer = editor_active_buffer_get(editor);
                 editor->search_start_cursor_offset = active_buffer->cursor_offset;
             }
+
+            if (editor->mode < target_focus)
+                editor_mode_set(editor, target_focus);
+
+            editor->focus = target_focus;
+            editor->search_buffer.has_changed = true; // force a search
+            editor->search_replace_buffer.has_changed = true; // force a search
         } break;
 
         case editor_command_tag_select_next:
@@ -1034,6 +1082,7 @@ editor_command_execute_signature
                 } break;
 
                 case editor_focus_search:
+                case editor_focus_search_replace:
                 {
                     editor_buffer *active_buffer = editor_active_buffer_get(editor);
 
@@ -1055,7 +1104,7 @@ editor_command_execute_signature
                     }
                 } break;
 
-                cases_complete(editor->focus);
+                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
             }
         } break;
 
@@ -1096,8 +1145,7 @@ editor_command_execute_signature
                         {
                             editor->active_buffer_index = editor_directory_load_all_files(platform, editor, relative_path);
 
-                            editor->mode  = editor_focus_buffer;
-                            editor->focus = editor_focus_buffer;
+                            editor_mode_set(editor, editor_focus_buffer);
                         }
                         else // push into directory
                         {
@@ -1116,18 +1164,73 @@ editor_command_execute_signature
                         editor_buffer_load_file(platform, editor, buffer_index);
 
                         editor->active_buffer_index = buffer_index;
-                        editor->mode  = editor_focus_buffer;
-                        editor->focus = editor_focus_buffer;
+                        editor_mode_set(editor, editor_focus_buffer);
                     }
                 } break;
 
                 case editor_focus_search:
+                case editor_focus_search_replace:
                 {
-                    editor->mode  = editor_focus_buffer;
-                    editor->focus = editor_focus_buffer;
+                    if (editor->mode == editor_focus_search)
+                    {
+                        assert(editor->focus == editor_focus_search);
+                        editor_mode_set(editor, editor_focus_buffer);
+                        break;
+                    }
+
+                    editor_buffer *active_buffer = editor_active_buffer_get(editor);
+                    editor_editable_buffer buffer = editor_buffer_edit_begin(editor, active_buffer);
+
+                    string pattern     = string255_to_string(editor->search_buffer.text);
+                    string replacement = string255_to_string(editor->search_replace_buffer.text);
+
+                    // replace all and close mode
+                    if (command_tag == editor_command_tag_select_accept_all)
+                    {
+                        string text = buffer.text;
+
+                        u32 cursor_offset = 0;
+                        while (true)
+                        {
+                            string at = editor_search_forward(editor, buffer.text, cursor_offset, pattern);
+                            if (!at.base)
+                                break;
+
+                            cursor_offset = (u32) (at.base - buffer.text.base);
+
+                            editor_remove(editor, &buffer, cursor_offset, pattern.count);
+                            editor_insert(editor, &buffer, cursor_offset, replacement);
+
+                            cursor_offset += replacement.count;
+                        }
+
+                        buffer.cursor_offset = cursor_offset;
+                        editor_mode_set(editor, editor_focus_buffer);
+                    }
+                    else
+                    {
+                        // break if we don't have a match
+                        {
+                            string at = mos_remaining_substring(buffer.text, buffer.cursor_offset);
+                            if (!mos_try_skip(&at, pattern))
+                                break;
+                        }
+
+                        editor_remove(editor, &buffer, buffer.cursor_offset, pattern.count);
+                        editor_insert(editor, &buffer, buffer.cursor_offset, replacement);
+
+                        // HACK: after replace, we can't garantee the start position is still valid
+                        editor->search_start_cursor_offset = buffer.cursor_offset;
+
+                        string at = editor_search_forward(editor, buffer.text, buffer.cursor_offset + replacement.count, pattern);
+                        if (at.base)
+                            buffer.cursor_offset = (u32) (at.base - buffer.text.base);
+                    }
+
+                    editor_buffer_edit_end(editor, active_buffer, buffer);
                 } break;
 
-                cases_complete(editor->focus);
+                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
             }
         } break;
 
@@ -1165,7 +1268,7 @@ editor_command_execute_signature
                     editor->file_open_relative_path.has_changed   = true;
                 } break;
 
-                cases_complete(editor->focus);
+                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
             }
         } break;
 
@@ -1199,7 +1302,7 @@ editor_command_execute_signature
                     buffer->has_changed = true;
                 } break;
 
-                cases_complete(editor->focus);
+                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
             }
         } break;
 
@@ -1209,24 +1312,23 @@ editor_command_execute_signature
             {
                 case editor_focus_file_search:
                 {
-                    editor->mode  = editor_focus_buffer;
-                    editor->focus = editor_focus_buffer;
+                    editor_mode_set(editor, editor_focus_buffer);
                 } break;
 
                 case editor_focus_search:
+                case editor_focus_search_replace:
                 {
-                    editor->mode  = editor_focus_buffer;
-                    editor->focus = editor_focus_buffer;
+                    editor_mode_set(editor, editor_focus_buffer);
 
                     editor_buffer *active_buffer = editor_active_buffer_get(editor);
                     active_buffer->cursor_offset = editor->search_start_cursor_offset;
                 } break;
 
-                cases_complete(editor->focus);
+                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
             }
         } break;
 
-        cases_complete(command_tag);
+        cases_complete("command tag %i", command_tag);
     }
 }
 
@@ -1700,4 +1802,15 @@ editor_search_backward_signature
     }
 
     return at;
+}
+
+editor_mode_set_signature
+{
+    assert(mode < editor_focus_count);
+    if (editor->mode != mode)
+    {
+        editor->mode = mode;
+        editor->focus = mode;
+        editor->previous_focus = editor_focus_buffer;
+    }
 }
