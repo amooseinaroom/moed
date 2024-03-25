@@ -24,16 +24,6 @@ simple minimal text editor for programming using C and molib
 
 # key bindings
 
-The editor currently only opens files with the following extensions:
-- h
-- c
-- cpp
-- t
-- txt
-- glsl
-- hlsl
-- gitignore
-
 The editor automatically inserts and removes tabs when adding or removing lines and tries to remove trailing spaces.
 
 - ctrl+S : save active buffer
@@ -63,6 +53,12 @@ The editor automatically inserts and removes tabs when adding or removing lines 
 - shift+tab : remove current line leading tab
 - page down : move down by visible line count
 - page up : move up by visible line count
+
+# file extensions
+
+On first start the editor generates the file `moed_file_extensions.txt`.
+It contains a space separated list of extensions the editor will open as text files.
+You can make changes to the file, however the editor only checks for file extensions at start up.
 
 # build
 This project uses the C single header libraries molib as a git submodule.

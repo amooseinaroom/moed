@@ -10,9 +10,35 @@
 
 typedef struct
 {
+    u8 base[31];
+    u8 count;
+} string31;
+
+array_type(string31_array, string31);
+
+string string31_to_string(string31 text)
+{
+    return sl(string) { text.base, (usize) text.count };
+}
+
+string31 string31_from_string(string text)
+{
+    assert(text.count <= 31);
+
+    string31 result;
+    result.count = (u8) text.count;
+    memcpy(result.base, text.base, result.count);
+
+    return result;
+}
+
+typedef struct
+{
     u8 base[255];
     u8 count;
 } string255;
+
+array_type(string255_array, string255);
 
 string string255_to_string(string255 text)
 {
@@ -142,13 +168,14 @@ typedef struct
 typedef struct
 {
     moma_arena memory;
+
+    // in order of allocation from memory
+    string31_array      file_extensions;
     editor_buffer_array buffers;
 
     u32 active_buffer_index;
     u32 tab_space_count;
 
-    string255 file_extensions[64];
-    u32       file_extension_count;
 
     editor_command commands[512];
     u32            command_count;
@@ -286,23 +313,80 @@ editor_command * editor_add_command(editor_state *editor, editor_focus focus, ed
     return command;
 }
 
+const string editor_file_extension_list_path = sc("moed_file_extensions.txt");
+
 void editor_init(editor_state *editor, mop_platform *platform)
 {
-    moma_create(&editor->memory, platform, 1 << 30); // 1 gb
+    moma_arena *memory = &editor->memory;
+
+    moma_create(memory, platform, 1 << 30); // 1 gb
 
     editor->tab_space_count = 4;
 
     editor->visible_line_count_top    = 5;
     editor->visible_line_count_bottom = editor->visible_line_count_top;
 
-    editor_file_extension_add(editor, s("h"));
-    editor_file_extension_add(editor, s("c"));
-    editor_file_extension_add(editor, s("cpp"));
-    editor_file_extension_add(editor, s("t"));
-    editor_file_extension_add(editor, s("txt"));
-    editor_file_extension_add(editor, s("glsl"));
-    editor_file_extension_add(editor, s("hlsl"));
-    editor_file_extension_add(editor, s("gitignore"));
+    {
+        usize tmemory_frame = memory->used_count;
+
+        mop_read_file_result result = moma_read_file(platform, memory, editor_file_extension_list_path);
+
+        if (result.ok)
+        {
+            string iterator = result.data;
+
+            mos_skip_white_space(&iterator);
+
+            while (iterator.count)
+            {
+                string extension = mos_skip_until_set_or_end(&iterator, s(" \t\n\r"));
+                mos_skip_white_space(&iterator);
+                assert(extension.count);
+
+                editor_file_extension_add(editor, extension);
+            }
+
+            memory->used_count = tmemory_frame;
+
+            // free file result data and move extensions to beginning of allocation
+            string31_array file_extensions = { null, editor->file_extensions.count };
+            moma_reallocate_array(memory, &file_extensions, string31);
+            memcpy(file_extensions.base,  editor->file_extensions.base, sizeof( editor->file_extensions.base[0]) * editor->file_extensions.count);
+            editor->file_extensions = file_extensions;
+        }
+        else
+        {
+            // add some default common extensions
+            editor_file_extension_add(editor, s("h"));
+            editor_file_extension_add(editor, s("c"));
+            editor_file_extension_add(editor, s("cpp"));
+            editor_file_extension_add(editor, s("t"));
+            editor_file_extension_add(editor, s("txt"));
+            editor_file_extension_add(editor, s("glsl"));
+            editor_file_extension_add(editor, s("hlsl"));
+            editor_file_extension_add(editor, s("gitignore"));
+            editor_file_extension_add(editor, s("bat"));
+            editor_file_extension_add(editor, s("py"));
+            editor_file_extension_add(editor, s("js"));
+            editor_file_extension_add(editor, s("ts"));
+            editor_file_extension_add(editor, s("css"));
+            editor_file_extension_add(editor, s("html"));
+            editor_file_extension_add(editor, s("xml"));
+
+            // save default extensions
+
+            mos_string_buffer builder = mos_buffer_from_memory(memory->base, memory->count - memory->used_count);
+
+            for (u32 i = 0; i < editor->file_extensions.count; i++)
+            {
+                string extension = string31_to_string(editor->file_extensions.base[i]);
+                mos_write(&builder, "%.*s ", fs(extension));
+            }
+            mos_write(&builder, "\r\n");
+
+            mop_write_file(platform, editor_file_extension_list_path, mos_buffer_to_string(builder));
+        }
+    }
 
     // editor_focus_buffer
     {
@@ -823,19 +907,28 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
 editor_file_extension_add_signature
 {
-    assert(editor->file_extension_count < carray_count(editor->file_extensions));
+    assert(!editor->buffers.base); // add all extensions before adding any buffers
 
-    editor->file_extensions[editor->file_extension_count] = string255_from_string(extension);
-    editor->file_extension_count += 1;
+    // skip duplicates
+    for (u32 i = 0; i < editor->file_extensions.count; i++)
+    {
+        if (mos_are_equal(extension, string31_to_string(editor->file_extensions.base[i])))
+            return;
+    }
+
+    editor->file_extensions.count += 1;
+    moma_reallocate_array(&editor->memory, &editor->file_extensions, string31);
+
+    editor->file_extensions.base[editor->file_extensions.count - 1] = string31_from_string(extension);
 }
 
 editor_file_extension_check_signature
 {
     mos_split_path_result split = mos_split_path(path);
 
-    for (u32 i = 0; i < editor->file_extension_count; i++)
+    for (u32 i = 0; i < editor->file_extensions.count; i++)
     {
-        if (mos_are_equal(split.extension, string255_to_string(editor->file_extensions[i])))
+        if (mos_are_equal(split.extension, string31_to_string(editor->file_extensions.base[i])))
             return true;
     }
 
