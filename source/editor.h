@@ -103,6 +103,9 @@ typedef enum
     editor_command_tag_buffer_next,
     editor_command_tag_buffer_previous,
 
+    editor_command_tag_select_first,
+    editor_command_tag_select_last,
+
     editor_command_tag_select_next,
     editor_command_tag_select_previous,
 
@@ -397,6 +400,11 @@ void editor_init(editor_state *editor, mop_platform *platform)
         command->check_mask = editor_character_mask_all;
         command->character.with_control = true;
 
+        command = editor_command_add(editor, ~0, editor_command_tag_select_cancel);
+        command->check_mask = editor_character_mask_all;
+        command->character.code = mop_character_symbol_escape;
+        command->character.is_symbol = true;
+
         command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_file_search), editor_command_tag_file_open);
         command->check_mask = editor_character_mask_all;
         command->character.code = 'P';
@@ -438,11 +446,6 @@ void editor_init(editor_state *editor, mop_platform *platform)
         command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_previous);
         command->check_mask = editor_character_mask_all;
         command->character.code = mop_character_symbol_up;
-        command->character.is_symbol = true;
-
-        command = editor_command_add(editor, flag32(editor_focus_buffer) | focus_search_or_replace_mask, editor_command_tag_select_cancel);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_escape;
         command->character.is_symbol = true;
 
         // search only
@@ -505,11 +508,6 @@ void editor_init(editor_state *editor, mop_platform *platform)
         command->character.code = mop_character_symbol_return;
         command->character.is_symbol = true;
         command->character.with_control = true;
-
-        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_file_search), editor_command_tag_select_cancel);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_escape;
-        command->character.is_symbol = true;
     }
 
     editor->active_buffer_index = editor_buffer_add(editor, s("new"), false);
@@ -973,150 +971,85 @@ editor_command_add_signature
 
 editor_command_execute_signature
 {
-    switch (command_tag)
+    // by focus by command
+    b8 handled = true;
+    switch (editor->focus)
     {
-        case editor_command_tag_buffer_next:
-        case editor_command_tag_buffer_previous:
+        case editor_focus_buffer:
         {
-            s32 direction = -(command_tag - editor_command_tag_buffer_next) * 2 + 1;
-
-            if (editor->buffers.count)
-                editor->active_buffer_index = (editor->active_buffer_index + editor->buffers.count + direction) % editor->buffers.count;
+            handled = false;
         } break;
 
-        case editor_command_tag_buffer_save:
+        case editor_focus_file_search:
         {
-            editor_buffer *active_buffer = editor_active_buffer_get(editor);
-            assert(active_buffer->is_file);
+            editor_file_search *file_search = &editor->file_search;
 
-            usize tmemory_frame = editor->memory.used_count;
-
-            string text = editor_buffer_text(editor, active_buffer);
-
-            // save with line endings
-
-            mos_string_buffer builder = mos_buffer_from_memory(editor->memory.base + editor->memory.used_count, editor->memory.count - editor->memory.used_count);
-
-            string iterator = text;
-            u32 count = 0;
-            while (iterator.count)
+            switch (command_tag)
             {
-                mos_utf8_result result = mos_utf8_advance(&iterator);
-                if (result.utf32_code == '\n')
+                case editor_command_tag_select_next:
+                case editor_command_tag_select_previous:
                 {
-                    mos_write(&builder, "\r\n");
-                }
-                else
-                {
-                    assert(builder.used_count + result.byte_count <= builder.total_count);
-                    memcpy(builder.base + builder.used_count, iterator.base - result.byte_count, result.byte_count);
-                    builder.used_count += result.byte_count;
-                }
-            }
-
-            active_buffer->file_save_error = !mop_write_file(platform, string255_to_string(active_buffer->title), mos_buffer_to_string(builder));
-
-            active_buffer->has_changed &= active_buffer->file_save_error;
-
-            editor->memory.used_count = tmemory_frame;
-        } break;
-
-        case editor_command_tag_focus_buffer:
-        {
-            if (editor->focus == editor_focus_buffer)
-            {
-                editor->focus = editor->previous_focus;
-            }
-            else
-            {
-                editor->previous_focus = editor->focus;
-                editor->focus          = editor_focus_buffer;
-            }
-        } break;
-
-        case editor_command_tag_file_open:
-        {
-            if (editor->mode == editor_focus_file_search)
-            {
-                editor_mode_set(editor, editor_focus_buffer);
-            }
-            else
-            {
-                editor_mode_set(editor, editor_focus_file_search);
-                editor->file_open_relative_path.has_changed = true; // force a search
-            }
-        } break;
-
-        case editor_command_tag_focus_search:
-        case editor_command_tag_focus_search_replace:
-        {
-            editor_focus target_focus = (editor_focus) (editor_focus_search + command_tag - editor_command_tag_focus_search);
-
-            if (editor->mode == editor_focus_buffer)
-            {
-                editor_buffer *active_buffer = editor_active_buffer_get(editor);
-                editor->search_start_cursor_offset = active_buffer->cursor_offset;
-            }
-
-            if (editor->mode < target_focus)
-                editor_mode_set(editor, target_focus);
-
-            editor->focus = target_focus;
-            editor->search_buffer.has_changed = true; // force a search
-            editor->search_replace_buffer.has_changed = true; // force a search
-        } break;
-
-        case editor_command_tag_select_next:
-        case editor_command_tag_select_previous:
-        {
-            switch (editor->focus)
-            {
-                case editor_focus_file_search:
-                {
-                    editor_file_search *file_search = &editor->file_search;
-
                     s32 direction = -(command_tag - editor_command_tag_select_next) * 2 + 1;
 
                     if (file_search->result_count)
                         file_search->selected_index = (file_search->selected_index + file_search->result_count + direction) % file_search->result_count;
                 } break;
 
-                case editor_focus_search:
-                case editor_focus_search_replace:
+                case editor_command_tag_select_push:
                 {
-                    editor_buffer *active_buffer = editor_active_buffer_get(editor);
+                    if (!file_search->result_count)
+                        break;
 
-                    string text = editor_buffer_text(editor, active_buffer);
-                    string pattern = string255_to_string(editor->search_buffer.text);
-                    u32 offset = editor->search_start_cursor_offset;
+                    assert(file_search->selected_index < file_search->result_count);
+                    mop_file_search_result result = file_search->results[file_search->selected_index];
 
-                    if (command_tag == editor_command_tag_select_next)
                     {
-                        string at = editor_search_forward(editor, text, active_buffer->cursor_offset + 1, pattern);
-                        if (at.base)
-                            active_buffer->cursor_offset = (u32) (at.base - text.base);
+                        string buffer = { editor->file_open_relative_path.text.base, carray_count(editor->file_open_relative_path.text.base) };
+                        string relative_path = editor_get_relative_path(buffer, platform, result.filepath);
+                        editor->file_open_relative_path.text = string255_from_string(relative_path);
                     }
-                    else
+
+                    string255 *text = &editor->file_open_relative_path.text;
+
+                    if (!result.is_parent_directory && result.is_directory)
                     {
-                        string at = editor_search_backward(editor, text, active_buffer->cursor_offset, pattern);
-                        if (at.base)
-                            active_buffer->cursor_offset = (u32) (at.base - text.base);
+                        assert(text->count < carray_count(text->base));
+                        assert(text->base[text->count - 1] != '/');
+                        text->base[text->count] = '/';
+                        text->count += 1;
                     }
+
+                    editor->file_open_relative_path.cursor_offset = text->count;
+                    editor->file_open_relative_path.has_changed   = true;
                 } break;
 
-                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
-            }
-        } break;
-
-        case editor_command_tag_select_accept:
-        case editor_command_tag_select_accept_all:
-        {
-            switch (editor->focus)
-            {
-                case editor_focus_file_search:
+                case editor_command_tag_select_pop:
                 {
-                    editor_file_search *file_search = &editor->file_search;
+                    editor_buffer255 *buffer = &editor->file_open_relative_path;
 
+                    string path = string255_to_string(buffer->text);
+                    mos_split_path_result split = mos_split_path(path);
+
+                    path = split.directory;
+                    if (!split.name.count)
+                    {
+                        while (path.count && (path.base[path.count - 1] != '/'))
+                            path.count -= 1;
+                    }
+                    else if (path.count)
+                    {
+                        path.count += 1;
+                        assert(path.base[path.count - 1] == '/');
+                    }
+
+                    buffer->text = string255_from_string(path);
+                    buffer->cursor_offset = buffer->text.count;
+                    buffer->has_changed = true;
+                } break;
+
+                case editor_command_tag_select_accept:
+                case editor_command_tag_select_accept_all:
+                {
                     string255 relative_path255 = editor->file_open_relative_path.text;
                     if (file_search->result_count)
                     {
@@ -1168,8 +1101,54 @@ editor_command_execute_signature
                     }
                 } break;
 
-                case editor_focus_search:
-                case editor_focus_search_replace:
+                default:
+                {
+                    handled = false;
+                }
+            }
+        } break;
+
+        case editor_focus_search:
+        case editor_focus_search_replace:
+        {
+            editor_buffer *active_buffer = editor_active_buffer_get(editor);
+
+            string text = editor_buffer_text(editor, active_buffer);
+            string pattern = string255_to_string(editor->search_buffer.text);
+            u32 offset = editor->search_start_cursor_offset;
+
+            switch (command_tag)
+            {
+                case editor_command_tag_select_first:
+                {
+                    string at = editor_search_forward(editor, text, 0, pattern);
+                    if (at.base)
+                        active_buffer->cursor_offset = (u32) (at.base - text.base);
+                } break;
+
+                case editor_command_tag_select_next:
+                {
+                    string at = editor_search_forward(editor, text, active_buffer->cursor_offset + 1, pattern);
+                    if (at.base)
+                        active_buffer->cursor_offset = (u32) (at.base - text.base);
+                } break;
+
+                case editor_command_tag_select_previous:
+                {
+                    string at = editor_search_backward(editor, text, active_buffer->cursor_offset, pattern);
+                    if (at.base)
+                        active_buffer->cursor_offset = (u32) (at.base - text.base);
+                } break;
+
+                case editor_command_tag_select_last:
+                {
+                    string at = editor_search_backward(editor, text, text.count, pattern);
+                    if (at.base)
+                        active_buffer->cursor_offset = (u32) (at.base - text.base);
+                } break;
+
+                case editor_command_tag_select_accept:
+                case editor_command_tag_select_accept_all:
                 {
                     if (editor->mode == editor_focus_search)
                     {
@@ -1230,86 +1209,31 @@ editor_command_execute_signature
                     editor_buffer_edit_end(editor, active_buffer, buffer);
                 } break;
 
-                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
-            }
-        } break;
-
-        case editor_command_tag_select_push:
-        {
-            switch (editor->focus)
-            {
-                case editor_focus_file_search:
+                default:
                 {
-                    editor_file_search *file_search = &editor->file_search;
-
-                    if (!file_search->result_count)
-                        break;
-
-                    assert(file_search->selected_index < file_search->result_count);
-                    mop_file_search_result result = file_search->results[file_search->selected_index];
-
-                    {
-                        string buffer = { editor->file_open_relative_path.text.base, carray_count(editor->file_open_relative_path.text.base) };
-                        string relative_path = editor_get_relative_path(buffer, platform, result.filepath);
-                        editor->file_open_relative_path.text = string255_from_string(relative_path);
-                    }
-
-                    string255 *text = &editor->file_open_relative_path.text;
-
-                    if (!result.is_parent_directory && result.is_directory)
-                    {
-                        assert(text->count < carray_count(text->base));
-                        assert(text->base[text->count - 1] != '/');
-                        text->base[text->count] = '/';
-                        text->count += 1;
-                    }
-
-                    editor->file_open_relative_path.cursor_offset = text->count;
-                    editor->file_open_relative_path.has_changed   = true;
-                } break;
-
-                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
+                    handled = false;
+                }
             }
         } break;
 
-        case editor_command_tag_select_pop:
-        {
-            switch (editor->focus)
-            {
-                case editor_focus_file_search:
-                {
-                    editor_file_search *file_search = &editor->file_search;
+        cases_complete("focus %.*s", fs(editor_focus_names[editor->mode]));
+    }
 
-                    editor_buffer255 *buffer = &editor->file_open_relative_path;
+    if (handled)
+        return;
 
-                    string path = string255_to_string(buffer->text);
-                    mos_split_path_result split = mos_split_path(path);
+    handled = true;
 
-                    path = split.directory;
-                    if (!split.name.count)
-                    {
-                        while (path.count && (path.base[path.count - 1] != '/'))
-                            path.count -= 1;
-                    }
-                    else if (path.count)
-                    {
-                        path.count += 1;
-                        assert(path.base[path.count - 1] == '/');
-                    }
-
-                    buffer->text = string255_from_string(path);
-                    buffer->cursor_offset = buffer->text.count;
-                    buffer->has_changed = true;
-                } break;
-
-                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
-            }
-        } break;
-
+    // by command
+    switch (command_tag)
+    {
         case editor_command_tag_select_cancel:
         {
-            switch (editor->focus)
+            switch (editor->mode)
             {
+                case editor_focus_buffer:
+                break;
+
                 case editor_focus_file_search:
                 {
                     editor_mode_set(editor, editor_focus_buffer);
@@ -1324,12 +1248,108 @@ editor_command_execute_signature
                     active_buffer->cursor_offset = editor->search_start_cursor_offset;
                 } break;
 
-                cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
+                cases_complete("mode %.*s", fs(editor_focus_names[editor->mode]));
             }
+        } break;
+
+        case editor_command_tag_focus_buffer:
+        {
+            if (editor->focus == editor_focus_buffer)
+            {
+                editor->focus = editor->previous_focus;
+            }
+            else
+            {
+                editor->previous_focus = editor->focus;
+                editor->focus          = editor_focus_buffer;
+            }
+        } break;
+
+        case editor_command_tag_file_open:
+        {
+            if (editor->mode == editor_focus_file_search)
+            {
+                editor_mode_set(editor, editor_focus_buffer);
+            }
+            else
+            {
+                editor_mode_set(editor, editor_focus_file_search);
+                editor->file_open_relative_path.has_changed = true; // force a search
+            }
+        } break;
+
+        case editor_command_tag_focus_search:
+        case editor_command_tag_focus_search_replace:
+        {
+            editor_focus target_focus = (editor_focus) (editor_focus_search + command_tag - editor_command_tag_focus_search);
+
+            if (editor->mode == editor_focus_buffer)
+            {
+                editor_buffer *active_buffer = editor_active_buffer_get(editor);
+                editor->search_start_cursor_offset = active_buffer->cursor_offset;
+            }
+
+            if (editor->mode < target_focus)
+                editor_mode_set(editor, target_focus);
+
+            editor->focus = target_focus;
+            editor->search_buffer.has_changed = true; // force a search
+            editor->search_replace_buffer.has_changed = true; // force a search
+        } break;
+
+        case editor_command_tag_buffer_next:
+        case editor_command_tag_buffer_previous:
+        {
+            if (editor->mode != editor_focus_buffer)
+                break;
+
+            s32 direction = -(command_tag - editor_command_tag_buffer_next) * 2 + 1;
+
+            if (editor->buffers.count)
+                editor->active_buffer_index = (editor->active_buffer_index + editor->buffers.count + direction) % editor->buffers.count;
+        } break;
+
+        case editor_command_tag_buffer_save:
+        {
+            editor_buffer *active_buffer = editor_active_buffer_get(editor);
+            assert(active_buffer->is_file);
+
+            usize tmemory_frame = editor->memory.used_count;
+
+            string text = editor_buffer_text(editor, active_buffer);
+
+            // save with line endings
+
+            mos_string_buffer builder = mos_buffer_from_memory(editor->memory.base + editor->memory.used_count, editor->memory.count - editor->memory.used_count);
+
+            string iterator = text;
+            u32 count = 0;
+            while (iterator.count)
+            {
+                mos_utf8_result result = mos_utf8_advance(&iterator);
+                if (result.utf32_code == '\n')
+                {
+                    mos_write(&builder, "\r\n");
+                }
+                else
+                {
+                    assert(builder.used_count + result.byte_count <= builder.total_count);
+                    memcpy(builder.base + builder.used_count, iterator.base - result.byte_count, result.byte_count);
+                    builder.used_count += result.byte_count;
+                }
+            }
+
+            active_buffer->file_save_error = !mop_write_file(platform, string255_to_string(active_buffer->title), mos_buffer_to_string(builder));
+
+            active_buffer->has_changed &= active_buffer->file_save_error;
+
+            editor->memory.used_count = tmemory_frame;
         } break;
 
         cases_complete("command tag %i", command_tag);
     }
+
+    assert(handled);
 }
 
 editor_buffer_text_siganture
