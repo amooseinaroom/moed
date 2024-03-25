@@ -94,7 +94,8 @@ typedef enum
 {
     editor_command_tag_file_open,
     editor_command_tag_buffer_save,
-    editor_command_tag_reload_buffer,
+    editor_command_tag_buffer_save_all,
+    editor_command_tag_buffer_reload,
 
     editor_command_tag_focus_buffer,
     editor_command_tag_focus_search,
@@ -241,7 +242,10 @@ editor_buffer_find_or_add_signature;
 #define  editor_buffer_load_file_signature void editor_buffer_load_file(mop_platform *platform, editor_state *editor, u32 buffer_index)
 editor_buffer_load_file_signature;
 
-#define editor_directory_load_all_files_signature u32 editor_directory_load_all_files(mop_platform *platform, editor_state *editor, string path)
+#define  editor_buffer_save_file_signature void editor_buffer_save_file(mop_platform *platform, editor_state *editor, u32 buffer_index)
+editor_buffer_save_file_signature;
+
+#define editor_directory_load_all_files_signature u32 editor_directory_load_all_files(mop_platform *platform, editor_state *editor, string relative_path)
 editor_directory_load_all_files_signature;
 
 #define editor_active_buffer_get_signature editor_buffer * editor_active_buffer_get(editor_state *editor)
@@ -393,6 +397,18 @@ void editor_init(editor_state *editor, mop_platform *platform)
         editor_command *command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_save);
         command->character.code = 'S';
         command->check_mask = editor_character_mask_all;
+        command->character.with_control = true;
+
+        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_save_all);
+        command->character.code = 'S';
+        command->check_mask = editor_character_mask_all;
+        command->character.with_shift = true;
+        command->character.with_control = true;
+
+        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_reload);
+        command->character.code = 'P';
+        command->check_mask = editor_character_mask_all;
+        command->character.with_shift = true;
         command->character.with_control = true;
 
         command = editor_command_add(editor, ~0, editor_command_tag_focus_buffer);
@@ -1321,41 +1337,35 @@ editor_command_execute_signature
                 editor->active_buffer_index = (editor->active_buffer_index + editor->buffers.count + direction) % editor->buffers.count;
         } break;
 
+        case editor_command_tag_buffer_reload:
+        {
+            if (editor->mode != editor_focus_buffer)
+                break;
+
+            editor_buffer_load_file(platform, editor, editor->active_buffer_index);
+        } break;
+
         case editor_command_tag_buffer_save:
         {
             editor_buffer *active_buffer = editor_active_buffer_get(editor);
-            assert(active_buffer->is_file);
 
-            usize tmemory_frame = editor->memory.used_count;
+            // HACK:
+            if (!active_buffer->is_file)
+                break;
 
-            string text = editor_buffer_text(editor, active_buffer);
+            editor_buffer_save_file(platform, editor, editor->active_buffer_index);
+        } break;
 
-            // save with line endings
-
-            mos_string_buffer builder = mos_buffer_from_memory(editor->memory.base + editor->memory.used_count, editor->memory.count - editor->memory.used_count);
-
-            string iterator = text;
-            u32 count = 0;
-            while (iterator.count)
+        case editor_command_tag_buffer_save_all:
+        {
+            for (u32 buffer_index = 0; buffer_index < editor->buffers.count; buffer_index++)
             {
-                mos_utf8_result result = mos_utf8_advance(&iterator);
-                if (result.utf32_code == '\n')
-                {
-                    mos_write(&builder, "\r\n");
-                }
-                else
-                {
-                    assert(builder.used_count + result.byte_count <= builder.total_count);
-                    memcpy(builder.base + builder.used_count, iterator.base - result.byte_count, result.byte_count);
-                    builder.used_count += result.byte_count;
-                }
+                // HACK:
+                if (!editor->buffers.base[buffer_index].is_file)
+                    continue;
+
+                editor_buffer_save_file(platform, editor, buffer_index);
             }
-
-            active_buffer->file_save_error = !mop_write_file(platform, string255_to_string(active_buffer->title), mos_buffer_to_string(builder));
-
-            active_buffer->has_changed &= active_buffer->file_save_error;
-
-            editor->memory.used_count = tmemory_frame;
         } break;
 
         cases_complete("command tag %i", command_tag);
@@ -1449,9 +1459,48 @@ editor_buffer_load_file_signature
     buffer->cursor_offset = min(buffer->cursor_offset, buffer->count);
 }
 
+editor_buffer_save_file_signature
+{
+    assert(buffer_index < editor->buffers.count);
+
+    editor_buffer *buffer = &editor->buffers.base[buffer_index];
+    assert(buffer->is_file);
+
+    usize tmemory_frame = editor->memory.used_count;
+
+    string text = editor_buffer_text(editor, buffer);
+
+    // save with line endings
+
+    mos_string_buffer builder = mos_buffer_from_memory(editor->memory.base + editor->memory.used_count, editor->memory.count - editor->memory.used_count);
+
+    string iterator = text;
+    u32 count = 0;
+    while (iterator.count)
+    {
+        mos_utf8_result result = mos_utf8_advance(&iterator);
+        if (result.utf32_code == '\n')
+        {
+            mos_write(&builder, "\r\n");
+        }
+        else
+        {
+            assert(builder.used_count + result.byte_count <= builder.total_count);
+            memcpy(builder.base + builder.used_count, iterator.base - result.byte_count, result.byte_count);
+            builder.used_count += result.byte_count;
+        }
+    }
+
+    buffer->file_save_error = !mop_write_file(platform, string255_to_string(buffer->title), mos_buffer_to_string(builder));
+
+    buffer->has_changed &= buffer->file_save_error;
+
+    editor->memory.used_count = tmemory_frame;
+}
+
 editor_directory_load_all_files_signature
 {
-    mop_file_search_iterator iterator = mop_file_search_init(platform, path);
+    mop_file_search_iterator iterator = mop_file_search_init(platform, relative_path);
 
     mop_file_search_result result;
 

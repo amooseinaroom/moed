@@ -174,12 +174,23 @@ int main(int argument_count, char *arguments[])
         // skip first arguments, the exe name
         for (u32 i = 1; i < info.argument_count; i++)
         {
+            if (arguments[i].count > 255)
+                continue;
+
+            mop_normalize_path(&arguments[i]);
+
             if (mop_path_is_directory(&platform, arguments[i]))
             {
                 string255 path = string255_from_string(arguments[i]);
-                assert(path.count < carray_count(path.base));
-                path.base[path.count] = '/';
-                path.count += 1;
+                if (path.count)
+                {
+                    if (path.count >= carray_count(path.base))
+                        continue;
+
+                    path.base[path.count] = '/';
+                    path.count += 1;
+                }
+
                 editor->active_buffer_index = editor_directory_load_all_files(&platform, editor, string255_to_string(path));
             }
             else
@@ -329,7 +340,7 @@ mop_hot_update_signature
         for (u32 buffer_index = 0; buffer_index < editor->buffers.count; buffer_index++)
         {
             editor_buffer *buffer = &editor->buffers.base[buffer_index];
-            if (buffer->has_changed)
+            if (buffer->has_changed && buffer->is_file)
             {
                 can_close = false;
             }
