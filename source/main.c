@@ -11,7 +11,7 @@
 
 #include "mo_platform.h"
 #include "mo_memory_arena.h"
-#include "mo_audio.h"
+// #include "mo_audio.h"
 
 #define STBTT_assert(x) STBTT_assert_wrapper(x)
 #include "stb_truetype.h"
@@ -24,8 +24,8 @@
 #define mop_implementation
 #include "mo_platform.h"
 
-#define moa_implementation
-#include "mo_audio.h"
+// #define moa_implementation
+// #include "mo_audio.h"
 
 #include "mo_math.h"
 
@@ -73,8 +73,7 @@ typedef struct
 
     random_pcg random;
 
-    usize memory_ui_reset_count;
-    usize memory_frame_reset_count;
+    usize memory_reset_offset;
 } program_state;
 
 program_state global_program;
@@ -91,6 +90,7 @@ const rgba text_color       = { 0.9f, 0.9f, 0.9f, 1.0f };
 const rgba text_color_match = { 1.0f, 0.4f, 0.1f, 1.0f };
 const rgba caption_color    = { 0.3f, 0.3f, 1.0f, 1.0f };
 const rgba caret_color      = { 0.2f, 1.0f, 0.2f, 0.5f };
+const rgba text_selection_color = { 1.0f, 1.0f, 1.0f, 0.25f };
 const rgba edit_focus_color = { 0.6f, 0.4f, 0.1f, 1.0f };
 
 f32 editor_box_inset = 4;
@@ -100,21 +100,33 @@ typedef enum
     draw_layer_background,
     draw_layer_caption,
     draw_layer_caption_inset,
+    draw_layer_text_selection,
     draw_layer_text,
     draw_layer_caret,
 
     draw_layer_count,
 } draw_layer;
 
+typedef struct
+{
+    box2 box;
+    box2 texture_box;
+    box2 bounding_box;
+    rgba color;
+    u32 text_offset;
+    u32 text_count;
+} render_glyph;
 
-#define draw_single_line_text_edit_signature void draw_single_line_text_edit(moui_state *ui, program_state *program, moui_simple_font font, moui_text_cursor *draw_cursor, editor_editable_buffer *buffer, b8 is_active)
-draw_single_line_text_edit_signature;
+array_type(render_glyph_array, render_glyph);
 
-#define draw_single_line_text_signature void draw_single_line_text(moui_state *ui, moui_simple_font font, moui_text_cursor *draw_cursor, editor_editable_buffer *buffer, editor_settings settings)
-draw_single_line_text_signature;
+#define render_single_line_text_edit_signature void render_single_line_text_edit(moui_state *ui, program_state *program, moui_simple_font font, moui_text_cursor *draw_cursor, editor_editable_buffer *buffer, b8 is_active)
+render_single_line_text_edit_signature;
 
-#define draw_text_advance_signature void draw_text_advance(moui_state *ui, editor_settings settings, rgba color, moui_simple_text_iterator *iterator, draw_text_closest_hit *closest_hit)
-draw_text_advance_signature;
+#define render_single_line_text_signature void render_single_line_text(moui_state *ui, moui_simple_font font, moui_text_cursor *draw_cursor, editor_editable_buffer *buffer, editor_settings settings, moma_arena *tmemory)
+render_single_line_text_signature;
+
+#define render_glyph_add_signature void render_glyph_add(moma_arena *memory, render_glyph_array *glyphs, editor_settings settings, rgba color, u8 *text_base, moui_simple_text_iterator *iterator)
+render_glyph_add_signature;
 
 mop_hot_update_signature;
 
@@ -139,10 +151,6 @@ int main(int argument_count, char *arguments[])
 
     program->random = random_from_win23();
 
-    // WARNING: all memory allocation from this line on is frame temporary
-
-    program->memory_ui_reset_count = program->memory.used_count;
-
     // allocate font
     s32 pixel_height = 22;
     s32 thickness    = 2;
@@ -152,9 +160,10 @@ int main(int argument_count, char *arguments[])
     program->ui.base.renderer.quad_count = 1 << 20;
     program->ui.base.renderer.texture_count = 64;
     program->ui.base.renderer.command_count = 1024;
-    moui_resize_buffers(&program->ui.base, &program->memory);
 
-    program->memory_frame_reset_count = program->memory.used_count;
+    // WARNING: all memory allocation from this line on is frame temporary
+    program->memory_reset_offset = program->memory.used_count;
+    moui_resize_buffers(&program->ui.base, &program->memory);
 
     editor_init(&program->editor, &platform);
     program->settings.max_file_display_count = 16;
@@ -240,6 +249,8 @@ int main(int argument_count, char *arguments[])
         moui_default_render_prepare_execute(&program->ui);
 
         moui_execute(&program->ui.base);
+
+        program->memory.used_count = program->memory_reset_offset;
         moui_resize_buffers(&program->ui.base, &program->memory);
 
         moui_default_render_end(&program->ui, &ui_window, true);
@@ -299,6 +310,7 @@ mop_hot_update_signature
     const f32 target_height = 360;
 
     // auto resize font depending on resolution
+    #if 0
     if (false)
     {
         s32 pixel_height = ceilf(16 * ui_size.y / target_height);
@@ -323,10 +335,9 @@ mop_hot_update_signature
             program->memory_frame_reset_count = program->memory.used_count;
         }
     }
+    #endif
 
     moui_simple_font font = program->font;
-
-    program->memory.used_count = program->memory_frame_reset_count;
 
     u32 visible_line_count           = (u32) ceilf(ui_size.y / font.line_spacing);
     u32 visible_line_character_count = (u32) ceilf(ui_size.x / (font.left_margin + font.right_margin));
@@ -399,7 +410,7 @@ mop_hot_update_signature
 
                 editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->file_open_relative_path);
 
-                draw_single_line_text_edit(ui, program, font, &draw_cursor, &buffer, editor->focus == editor_focus_file_search);
+                render_single_line_text_edit(ui, program, font, &draw_cursor, &buffer, editor->focus == editor_focus_file_search);
 
                 editor_buffer255_edit_end(editor, &editor->file_open_relative_path, buffer);
 
@@ -459,7 +470,7 @@ mop_hot_update_signature
 
                 editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->search_buffer);
 
-                draw_single_line_text_edit(ui, program, font, &draw_cursor, &buffer, editor->focus == editor_focus_search);
+                render_single_line_text_edit(ui, program, font, &draw_cursor, &buffer, editor->focus == editor_focus_search);
 
                 editor_buffer255_edit_end(editor, &editor->search_buffer, buffer);
 
@@ -469,7 +480,7 @@ mop_hot_update_signature
 
                     editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->search_replace_buffer);
 
-                    draw_single_line_text_edit(ui, program, font, &draw_cursor, &buffer, editor->focus == editor_focus_search_replace);
+                    render_single_line_text_edit(ui, program, font, &draw_cursor, &buffer, editor->focus == editor_focus_search_replace);
 
                     editor_buffer255_edit_end(editor, &editor->search_replace_buffer, buffer);
                 }
@@ -501,18 +512,22 @@ mop_hot_update_signature
             editor_buffer_to_next_line_start(editor, &editable_buffer);
 
         editable_buffer.text.count = editable_buffer.cursor_offset;
-        editable_buffer.cursor_offset = cursor_offset;
+        editable_buffer.cursor_offset          = cursor_offset;
+        editable_buffer.selection_start_offset = editable_buffer.selection_start_offset - active_buffer->draw_line_offset;
 
-        draw_single_line_text(ui, font,  &draw_cursor, &editable_buffer, program->settings);
+        render_single_line_text(ui, font, &draw_cursor, &editable_buffer, program->settings, &program->memory);
 
-        active_buffer->cursor_offset = editable_buffer.cursor_offset + active_buffer->draw_line_offset;
+        editable_buffer.cursor_offset          = editable_buffer.cursor_offset + active_buffer->draw_line_offset;
+        editable_buffer.selection_start_offset = editable_buffer.selection_start_offset + active_buffer->draw_line_offset;
 
-        // editor_buffer_edit_end(editor, active_buffer, editable_buffer);
+        editor_buffer_edit_end(editor, active_buffer, editable_buffer);
     }
 }
 
-draw_single_line_text_signature
+render_single_line_text_signature
 {
+    usize tmemory_frame = tmemory->used_count;
+
     string text = buffer->text;
     assert(buffer->cursor_offset <= text.count);
 
@@ -520,15 +535,15 @@ draw_single_line_text_signature
 
     moui_simple_text_iterator text_iterator = { font, *draw_cursor, left };
 
-    moui_set_command_texture(ui, draw_layer_text, font.texture);
-
     draw_text_closest_hit closest_hit = {0};
     closest_hit.x_distance = 1000000.0f;
     closest_hit.y_distance = 1000000.0f;
 
+    render_glyph_array glyphs = {0};
+
     while (text_iterator.text.count)
     {
-        draw_text_advance(ui, settings, text_color, &text_iterator, &closest_hit);
+        render_glyph_add(tmemory, &glyphs, settings, text_color, text.base, &text_iterator);
     }
 
     box2 caret_box;
@@ -541,7 +556,7 @@ draw_single_line_text_signature
     text_iterator.text = sl(string) { text.base + buffer->cursor_offset, text.count - buffer->cursor_offset };
     while (text_iterator.text.count)
     {
-        draw_text_advance(ui, settings, text_color, &text_iterator, &closest_hit);
+        render_glyph_add(tmemory, &glyphs, settings, text_color, text.base, &text_iterator);
     }
 
     if (closest_hit.text_base)
@@ -550,21 +565,152 @@ draw_single_line_text_signature
         assert(buffer->cursor_offset <= text.count);
     }
 
+    // render
+    {
+        moui_set_command_texture(ui, draw_layer_text, font.texture);
+
+        moui_vec2 texture_scale = { 1.0f / font.texture.width, 1.0f / font.texture.height };
+
+        for (u32 i = 0; i < glyphs.count; i++)
+        {
+            render_glyph glyph = glyphs.base[i];
+            moui_add_texture_quad(ui, texture_scale, moui_to_quad_colors(glyph.color), glyph.box, glyph.texture_box);
+        }
+    }
+
+    // highlight selection
+    {
+        u32 min_offset = min(buffer->cursor_offset, buffer->selection_start_offset);
+        u32 max_offset = max(buffer->cursor_offset, buffer->selection_start_offset);
+        assert(min_offset <= text.count);
+        assert(max_offset <= text.count);
+        string selection = mos_substring(text, min_offset, max_offset - min_offset);
+
+        moui_quad_colors highlight_colors = moui_to_quad_colors(text_selection_color);
+
+        box2 line_box;
+        b8 line_box_is_init = false;
+
+        f32 roundness = 4;
+
+        for (u32 i = 0; i < glyphs.count; i++)
+        {
+            render_glyph glyph = glyphs.base[i];
+            if ((min_offset <= glyph.text_offset) && (glyph.text_offset < max_offset))
+            {
+                box2 bounding_box = glyph.bounding_box;
+
+                if (line_box_is_init)
+                    line_box = box2_merge(line_box, bounding_box);
+                else
+                    line_box = bounding_box;
+
+                line_box_is_init = true;
+
+                if (text.base[glyph.text_offset] == '\n')
+                {
+                    moui_rounded_box(ui, draw_layer_text_selection, highlight_colors, line_box, roundness);
+                    line_box_is_init = false;
+                }
+            }
+        }
+
+        if (line_box_is_init)
+            moui_rounded_box(ui, draw_layer_text_selection, highlight_colors, line_box, roundness);
+    }
+
+    // check mouse selection
+    if (ui->input.cursor_active_mask & 1)
+    {
+        f32 closest_distance_x = 100000.0f;
+        f32 closest_distance_y = 100000.0f;
+        u32 closest_text_offset = -1;
+
+        for (u32 i = 0; i < glyphs.count; i++)
+        {
+            render_glyph glyph = glyphs.base[i];
+            box2 bounding_box = glyph.bounding_box;
+
+            f32 y_distance = 0;
+            if (ui->input.cursor.y < bounding_box.min.y)
+                y_distance = bounding_box.min.y - ui->input.cursor.y;
+            else if (ui->input.cursor.y >= bounding_box.max.y)
+                y_distance = ui->input.cursor.y - bounding_box.max.y;
+
+            u32 text_offset = glyph.text_offset;
+        #if 1
+            f32 x_center = (bounding_box.min.x + bounding_box.max.x) * 0.5f;
+            f32 x_distance;
+            if (ui->input.cursor.x < x_center)
+                x_distance = x_center - ui->input.cursor.x;
+            else
+            {
+                x_distance = ui->input.cursor.x - x_center;
+                text_offset += glyph.text_count;
+            }
+        #else
+            f32 x_distance = 0;
+            if (ui->input.cursor.x < bounding_box.min.x)
+                x_distance = bounding_box.min.x - ui->input.cursor.x;
+            else if (ui->input.cursor.x >= bounding_box.max.x)
+                x_distance = ui->input.cursor.x - bounding_box.max.x;
+        #endif
+
+            if (y_distance < closest_distance_y)
+            {
+                closest_text_offset = text_offset;
+                closest_distance_y  = y_distance;
+                closest_distance_x  = x_distance;
+            }
+            else if ((y_distance == closest_distance_y) && (x_distance < closest_distance_x))
+            {
+                closest_text_offset = text_offset;
+                closest_distance_x  = x_distance;
+            }
+        }
+
+        if (closest_text_offset != -1)
+        {
+            buffer->cursor_offset = closest_text_offset;
+
+            if ((ui->input.previous_cursor_active_mask & 1) == 0)
+                buffer->selection_start_offset = buffer->cursor_offset;
+        }
+    }
+
+    // render bounding boxes
+    if (false)
+    {
+        moui_vec2 texture_scale = { 1.0f / font.texture.width, 1.0f / font.texture.height };
+
+        moui_quad_colors bounds_colors = moui_to_quad_colors(sl(rgba) { 1.0f, 0.1f, 0.1f, 0.5f });
+
+        for (u32 i = 0; i < glyphs.count; i++)
+        {
+            render_glyph glyph = glyphs.base[i];
+            moui_box(ui, draw_layer_text + 1, bounds_colors, glyph.bounding_box);
+        }
+    }
+
     moui_rounded_box(ui, draw_layer_caret, moui_to_quad_colors(caret_color), caret_box, 2);
 
     *draw_cursor = text_iterator.cursor;
+
+    tmemory->used_count = tmemory_frame;
 }
 
-draw_text_advance_signature
+render_glyph_add_signature
 {
     if (!iterator->text.count)
         return;
 
     u8 *left_base = iterator->text.base;
 
+    u32 text_offset = (u32) (iterator->text.base - text_base);
+
     mos_utf8_result result = mos_utf8_advance(&iterator->text);
 
-    u8 *right_base = iterator->text.base;
+    u32 text_count = result.byte_count;
 
     moui_u32 render_code = result.utf32_code;
     if (render_code == '\n')
@@ -579,7 +725,7 @@ draw_text_advance_signature
             render_code = ' ';
         }
 
-        right_base = left_base; // new line bounding boxes should always point to offset befor the glyph
+        text_count = 0;
     }
 
     if ((render_code == ' ') && settings.show_white_space)
@@ -588,10 +734,8 @@ draw_text_advance_signature
         *(vec3 *) &color = vec3_scale(*(vec3 *) &color, 0.5f);
     }
 
-    moui_vec2 texture_scale = { 1.0f / iterator->font.texture.width, 1.0f / iterator->font.texture.height };
-
     moui_f32 bottom_to_line = iterator->font.bottom_to_line;
-    moui_f32 line_to_top    = iterator->font.line_to_top;
+    moui_f32 line_spacing   = iterator->font.line_spacing;
 
     // out_glyph->code = result.utf32_code;
     assert(iterator->font.glyph_count);
@@ -605,7 +749,7 @@ draw_text_advance_signature
         color = sl(rgba) { 1.0f, 0.5f, 0.1f, 1.0f };
     }
 
-    moui_quad_colors colors = moui_to_quad_colors(color);
+    moui_font_glyph space_glpyh = iterator->font.glyphs[0];
 
     {
         moui_font_glyph glyph = iterator->font.glyphs[glyph_index];
@@ -619,83 +763,38 @@ draw_text_advance_signature
         box.max.x = box.min.x + width;
         box.max.y = box.min.y + height;
 
-        moui_add_texture_quad(ui, texture_scale, colors, box, glyph.texture_box);
+        box2 bounding_box;
+        bounding_box.min.x = box.min.x;
+        bounding_box.max.x = box.max.x;
+        bounding_box.min.y = cursor_y - bottom_to_line;
+        bounding_box.max.y = bounding_box.min.y + line_spacing;
 
-        if (ui->input.cursor_active_mask & 1)
-        {
-            // we want to use the glyph bounding box, not the glyph draw box for layouting
-            box2 bounding_box;
-            bounding_box.min.x = box.min.x;
-            bounding_box.max.x = box.max.x;
-            bounding_box.min.y = cursor_y - bottom_to_line;
-            bounding_box.max.y = cursor_y + line_to_top;
-            //moui_quad_colors bounds_colors = moui_to_quad_colors(sl(rgba) { 1.0f, 0.1f, 0.1f, 0.5f });
-            //moui_add_texture_quad(ui, texture_scale, bounds_colors, bounding_box, glyph.texture_box);
-
-            f32 y_distance = 0;
-            if (ui->input.cursor.y < bounding_box.min.y)
-                y_distance = bounding_box.min.y - ui->input.cursor.y;
-            else if (ui->input.cursor.y >= bounding_box.max.y)
-                y_distance = ui->input.cursor.y - bounding_box.max.y;
-
-            u8 *text_base = left_base;
-        #if 1
-            f32 x_center = (bounding_box.min.x + bounding_box.max.x) * 0.5f;
-            f32 x_distance;
-            if (ui->input.cursor.x < x_center)
-                x_distance = x_center - ui->input.cursor.x;
-            else
-            {
-                x_distance = ui->input.cursor.x - x_center;
-                text_base = right_base;
-            }
-        #else
-            f32 x_distance = 0;
-            if (ui->input.cursor.x < bounding_box.min.x)
-                x_distance = bounding_box.min.x - ui->input.cursor.x;
-            else if (ui->input.cursor.x >= bounding_box.max.x)
-                x_distance = ui->input.cursor.x - bounding_box.max.x;
-        #endif
-
-            if (y_distance < closest_hit->y_distance)
-            {
-                closest_hit->text_base = text_base;
-                closest_hit->y_distance = y_distance;
-                closest_hit->x_distance = x_distance;
-            }
-            else if ((y_distance == closest_hit->y_distance) && (x_distance < closest_hit->x_distance))
-            {
-                closest_hit->text_base = text_base;
-                closest_hit->x_distance = x_distance;
-            }
-        }
-
-        //if ((ui->input.cursor_active_mask & 1) && moui_box_is_hot(ui, bounding_box))
-            //*selected_text_base = text_base;
-        // box2 ignored;
-        // moui_scissor(ui, &bounding_box, &ignored);
+        glyphs->count += 1;
+        moma_reallocate_array(memory, glyphs, render_glyph);
+        render_glyph *rglyph = &glyphs->base[glyphs->count - 1];
+        rglyph->box          = box;
+        rglyph->texture_box  = glyph.texture_box; // could be just glyph index
+        rglyph->bounding_box = bounding_box;
+        rglyph->color        = color;
+        rglyph->text_offset  = text_offset;
+        rglyph->text_count   = text_count;
 
         iterator->cursor.position.x += glyph.x_advance;
     }
 
     if (result.utf32_code == '\n')
-        moui_text_advance_line(iterator);
+        moui_text_cursor_advance_line(iterator->font, &iterator->cursor);
 }
 
-draw_single_line_text_edit_signature
+render_single_line_text_edit_signature
 {
     editor_state *editor = &program->editor;
 
     f32 min_x = draw_cursor->position.x;
     moui_box2 edit_box = moui_used_box_begin(ui);
 
-    // editor_editable_buffer buffer = editor_buffer255_edit_begin(editor, &editor->search_buffer);
-
-    draw_single_line_text(ui, font,  draw_cursor, buffer, program->settings);
-
-    //editor_buffer255_edit_end(editor, &editor->search_buffer, buffer);
-
-    moui_printf(ui, font, draw_layer_text, sl(moui_rgba) { 1.0f, 1.0f, 1.0f, 1.0f }, draw_cursor, "\n");
+    render_single_line_text(ui, font, draw_cursor, buffer, program->settings, &program->memory);
+    moui_text_cursor_advance_line(font, draw_cursor);
 
     edit_box = moui_used_box_end(ui, edit_box);
     edit_box.min.x = min_x - editor_box_inset; // some room for caret

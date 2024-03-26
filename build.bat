@@ -21,7 +21,11 @@ if not exist build mkdir build
 
 pushd build
 
-cl /Fo%name% /TP /c %source% %options%
+rem build as C++
+rem cl /Fo%name% /TP /c %source% %options%
+
+rem build as C
+cl /Fo%name% /TC /c %source% %options%
 
 if %enable_hot_reloading%==1 (
     echo hot reloading

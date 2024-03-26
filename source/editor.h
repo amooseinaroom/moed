@@ -65,6 +65,7 @@ typedef struct
     u32        count;
 
     u32        cursor_offset;
+    u32        selection_start_offset;
 
     u32 draw_line_offset;
     u32 draw_line_column;
@@ -79,6 +80,7 @@ typedef struct
     string text;
     u32    total_count;
     u32    cursor_offset;
+    u32    selection_start_offset;
     b8     has_changed;
 } editor_editable_buffer;
 
@@ -135,7 +137,8 @@ typedef union
     };
 } editor_character_mask;
 
-const editor_character_mask editor_character_mask_all = sl(editor_character_mask){ 0xff };
+const editor_character_mask editor_character_mask_all            = { (u8) 0x1111 };
+const editor_character_mask editor_character_mask_optional_shift = { (u8) 0b1011 };
 
 #define editor_focus_list(macro, ...) \
     macro(buffer, __VA_ARGS__) \
@@ -158,6 +161,7 @@ typedef struct
 {
     string255 text;
     u32 cursor_offset;
+    u32 selection_start_offset;
     b8  has_changed;
 } editor_buffer255;
 
@@ -217,6 +221,12 @@ typedef struct
     string match;
     b8     ok;
 } editor_file_search_filter_result;
+
+typedef struct
+{
+    u32 offset;
+    u32 count;
+} editor_selection;
 
 #define editor_file_extension_add_signature void editor_file_extension_add(editor_state *editor, string extension)
 editor_file_extension_add_signature;
@@ -316,6 +326,12 @@ editor_command_add_signature;
 
 #define editor_mode_set_signature void editor_mode_set(editor_state *editor, editor_focus mode)
 editor_mode_set_signature;
+
+#define editor_selection_get_signature editor_selection editor_selection_get(editor_state *editor, editor_editable_buffer *buffer)
+editor_selection_get_signature;
+
+#define editor_selection_remove_signature b8 editor_selection_remove(editor_state *editor, editor_editable_buffer *buffer)
+editor_selection_remove_signature;
 
 const string editor_file_extension_list_path = sc("moed_file_extensions.txt");
 
@@ -606,8 +622,11 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
             mos_utf8_encoding encoding = mos_encode_utf8(character.code);
             assert(encoding.count);
 
+            editor_selection_remove(editor, &buffer);
             editor_insert(editor, &buffer, buffer.cursor_offset, sl(string) { encoding.base, encoding.count });
             buffer.cursor_offset += encoding.count;
+
+            buffer.selection_start_offset = buffer.cursor_offset;
         }
         else
         {
@@ -615,6 +634,9 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
             {
                 case mop_character_symbol_backspace:
                 {
+                    if (editor_selection_remove(editor, &buffer))
+                        break;
+
                     u32 cursor_offset = buffer.cursor_offset;
 
                     // check if cursor is at start of logic line (without leading spaces)
@@ -651,6 +673,9 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
                 case mop_character_symbol_delete:
                 {
+                    if (editor_selection_remove(editor, &buffer))
+                        break;
+
                     if (buffer.cursor_offset >= buffer.text.count)
                         break;
 
@@ -679,6 +704,7 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
                     // insert new line
 
+                    editor_selection_remove(editor, &buffer);
                     editor_insert(editor, &buffer, buffer.cursor_offset, s("\n"));
                     buffer.cursor_offset += 1;
 
@@ -688,6 +714,8 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
                         editor_insert(editor, &buffer, buffer.cursor_offset, s(" "));
 
                     buffer.cursor_offset += tab_count * editor->tab_space_count;
+
+                    buffer.selection_start_offset = buffer.cursor_offset;
                 } break;
 
                 case mop_character_symbol_left:
@@ -828,6 +856,9 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
                     editor_buffer_to_line_end(editor, &buffer);
                 } break;
             }
+
+            if (!character.with_shift)
+                buffer.selection_start_offset = buffer.cursor_offset;
         }
 
         switch (editor->focus)
@@ -1533,10 +1564,11 @@ editor_directory_load_all_files_signature
 editor_buffer_edit_begin_signature
 {
     editor_editable_buffer result = {0};
-    result.text.base     = buffer->base;
-    result.text.count    = buffer->count;
-    result.total_count   = carray_count(buffer->base);
-    result.cursor_offset = buffer->cursor_offset;
+    result.text.base              = buffer->base;
+    result.text.count             = buffer->count;
+    result.total_count            = carray_count(buffer->base);
+    result.cursor_offset          = buffer->cursor_offset;
+    result.selection_start_offset = buffer->selection_start_offset;
 
     assert(result.text.count <= carray_count(buffer->base));
     assert(result.cursor_offset <= carray_count(buffer->base));
@@ -1548,18 +1580,21 @@ editor_buffer_edit_end_signature
 {
     assert(editable_buffer.text.count <= carray_count(buffer->base));
     assert(editable_buffer.cursor_offset <= carray_count(buffer->base));
-    buffer->count         = editable_buffer.text.count;
-    buffer->cursor_offset = editable_buffer.cursor_offset;
-    buffer->has_changed  |= editable_buffer.has_changed;
+
+    buffer->count                   = editable_buffer.text.count;
+    buffer->cursor_offset           = editable_buffer.cursor_offset;
+    buffer->selection_start_offset  = editable_buffer.selection_start_offset;
+    buffer->has_changed            |= editable_buffer.has_changed;
 }
 
 editor_buffer255_edit_begin_signature
 {
     editor_editable_buffer result = {0};
-    result.text.base     = buffer->text.base;
-    result.text.count    = buffer->text.count;
-    result.total_count   = carray_count(buffer->text.base);
-    result.cursor_offset = buffer->cursor_offset;
+    result.text.base              = buffer->text.base;
+    result.text.count             = buffer->text.count;
+    result.total_count            = carray_count(buffer->text.base);
+    result.cursor_offset          = buffer->cursor_offset;
+    result.selection_start_offset = buffer->selection_start_offset;
 
     assert(result.text.count <= carray_count(buffer->text.base));
     assert(result.cursor_offset <= carray_count(buffer->text.base));
@@ -1571,9 +1606,39 @@ editor_buffer255_edit_end_signature
 {
     assert(editable_buffer.text.count <= carray_count(buffer->text.base));
     assert(editable_buffer.cursor_offset <= carray_count(buffer->text.base));
-    buffer->text.count    = editable_buffer.text.count;
-    buffer->cursor_offset = editable_buffer.cursor_offset;
-    buffer->has_changed  |= editable_buffer.has_changed;
+
+    buffer->text.count              = editable_buffer.text.count;
+    buffer->cursor_offset           = editable_buffer.cursor_offset;
+    buffer->selection_start_offset  = editable_buffer.selection_start_offset;
+    buffer->has_changed            |= editable_buffer.has_changed;
+}
+
+editor_selection_get_signature
+{
+    editor_selection selection;
+    if (buffer->selection_start_offset <= buffer->cursor_offset)
+    {
+        selection.offset = buffer->selection_start_offset;
+        selection.count  = buffer->cursor_offset - buffer->selection_start_offset;
+    }
+    else
+    {
+        selection.offset = buffer->cursor_offset;
+        selection.count  = buffer->selection_start_offset - buffer->cursor_offset;
+    }
+
+    return selection;
+}
+
+editor_selection_remove_signature
+{
+    editor_selection selection = editor_selection_get(editor, buffer);
+    editor_remove(editor, buffer, selection.offset, selection.count);
+
+    buffer->cursor_offset          = selection.offset;
+    buffer->selection_start_offset = selection.offset;
+
+    return (selection.count > 0);
 }
 
 editor_insert_signature
