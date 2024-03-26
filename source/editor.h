@@ -357,8 +357,14 @@ editor_file_search_filter_check_signature;
 #define editor_search_forward_signature string editor_search_forward(editor_state *editor, string text, u32 offset, string pattern)
 editor_search_forward_signature;
 
+#define editor_buffer_search_forward_signature void editor_buffer_search_forward(editor_state *editor, editor_editable_buffer *buffer, u32 offset, string pattern)
+editor_buffer_search_forward_signature;
+
 #define editor_search_backward_signature string editor_search_backward(editor_state *editor, string text, u32 offset, string pattern)
 editor_search_backward_signature;
+
+#define editor_buffer_search_backward_signature void editor_buffer_search_backward(editor_state *editor, editor_editable_buffer *buffer, u32 offset, string pattern)
+editor_buffer_search_backward_signature;
 
 #define editor_get_absolute_path_signature string editor_get_absolute_path(u8_array buffer, mop_platform *platform, string relative_path)
 editor_get_absolute_path_signature;
@@ -957,25 +963,19 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
             editor_buffer *active_buffer = editor_active_buffer_get(editor);
 
-            string text = editor_buffer_text(editor, active_buffer);
             string pattern = string255_to_string(editor->search_buffer.text);
             u32 offset = editor->search_start_cursor_offset;
-            string at = editor_search_forward(editor, text, offset, pattern);
-            if (at.base)
-                active_buffer->cursor_offset = (u32) (at.base - text.base);
+
+            editor_editable_buffer buffer = editor_buffer_edit_begin(editor, active_buffer);
+            editor_buffer_search_forward(editor, &buffer, offset, pattern);
+            editor_buffer_edit_end(editor, active_buffer, buffer);
         } break;
     }
 
     // scroll buffer view
     {
         editor_buffer *active_buffer = editor_active_buffer_get(editor);
-
         editor_editable_buffer buffer = editor_buffer_edit_begin(editor, active_buffer);
-
-        //string text = buffer
-        // string line = mos_remaining_substring(text, buffer->draw_line_offset);
-
-        // u32 cursor_offset = buffer.cursor_offset;
 
         u32 line_column = editor_buffer_to_line_start(editor, &buffer);
         u32 line_offset = buffer.cursor_offset;
@@ -1010,8 +1010,6 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
         assert(!active_buffer->draw_line_offset || (active_buffer->base[active_buffer->draw_line_offset - 1] == '\n'));
         assert(active_buffer->draw_line_offset <= active_buffer->cursor_offset);
-
-        // buffer.cursor_offset = cursor_offset;
     }
 
 }
@@ -1200,40 +1198,34 @@ editor_command_execute_signature
         case editor_focus_search:
         case editor_focus_search_replace:
         {
-            editor_buffer *active_buffer = editor_active_buffer_get(editor);
-
-            string text = editor_buffer_text(editor, active_buffer);
             string pattern = string255_to_string(editor->search_buffer.text);
-            u32 offset = editor->search_start_cursor_offset;
+            // u32 offset = editor->search_start_cursor_offset;
+
+            editor_buffer *active_buffer = editor_active_buffer_get(editor);
+            editor_editable_buffer buffer = editor_buffer_edit_begin(editor, active_buffer);
 
             switch (command_tag)
             {
                 case editor_command_tag_select_first:
                 {
-                    string at = editor_search_forward(editor, text, 0, pattern);
-                    if (at.base)
-                        active_buffer->cursor_offset = (u32) (at.base - text.base);
+                    editor_buffer_search_forward(editor, &buffer, 0, pattern);
                 } break;
 
                 case editor_command_tag_select_next:
                 {
-                    string at = editor_search_forward(editor, text, active_buffer->cursor_offset + 1, pattern);
-                    if (at.base)
-                        active_buffer->cursor_offset = (u32) (at.base - text.base);
+                    editor_selection selection = editor_selection_get(editor, &buffer);
+                    editor_buffer_search_forward(editor, &buffer, selection.offset + 1, pattern);
                 } break;
 
                 case editor_command_tag_select_previous:
                 {
-                    string at = editor_search_backward(editor, text, active_buffer->cursor_offset, pattern);
-                    if (at.base)
-                        active_buffer->cursor_offset = (u32) (at.base - text.base);
+                    editor_selection selection = editor_selection_get(editor, &buffer);
+                    editor_buffer_search_backward(editor, &buffer, selection.offset, pattern);
                 } break;
 
                 case editor_command_tag_select_last:
                 {
-                    string at = editor_search_backward(editor, text, text.count, pattern);
-                    if (at.base)
-                        active_buffer->cursor_offset = (u32) (at.base - text.base);
+                    editor_buffer_search_backward(editor, &buffer, buffer.text.count, pattern);
                 } break;
 
                 case editor_command_tag_select_accept:
@@ -1246,10 +1238,6 @@ editor_command_execute_signature
                         break;
                     }
 
-                    editor_buffer *active_buffer = editor_active_buffer_get(editor);
-                    editor_editable_buffer buffer = editor_buffer_edit_begin(editor, active_buffer);
-
-                    string pattern     = string255_to_string(editor->search_buffer.text);
                     string replacement = string255_to_string(editor->search_replace_buffer.text);
 
                     // replace all and close mode
@@ -1272,30 +1260,29 @@ editor_command_execute_signature
                             cursor_offset += replacement.count;
                         }
 
-                        buffer.cursor_offset = cursor_offset;
+                        buffer.cursor_offset          = cursor_offset;
+                        buffer.selection_start_offset = buffer.cursor_offset;
                         editor_mode_set(editor, editor_focus_buffer);
                     }
                     else
                     {
+                        editor_selection selection = editor_selection_get(editor, &buffer);
+
                         // break if we don't have a match
                         {
-                            string at = mos_remaining_substring(buffer.text, buffer.cursor_offset);
+                            string at = mos_remaining_substring(buffer.text, selection.offset);
                             if (!mos_try_skip(&at, pattern))
                                 break;
                         }
 
-                        editor_remove(editor, &buffer, buffer.cursor_offset, pattern.count);
-                        editor_insert(editor, &buffer, buffer.cursor_offset, replacement);
+                        editor_remove(editor, &buffer, selection.offset, pattern.count);
+                        editor_insert(editor, &buffer, selection.offset, replacement);
+
+                        editor_buffer_search_forward(editor, &buffer, selection.offset + replacement.count, pattern);
 
                         // HACK: after replace, we can't garantee the start position is still valid
-                        editor->search_start_cursor_offset = buffer.cursor_offset;
-
-                        string at = editor_search_forward(editor, buffer.text, buffer.cursor_offset + replacement.count, pattern);
-                        if (at.base)
-                            buffer.cursor_offset = (u32) (at.base - buffer.text.base);
+                        editor->search_start_cursor_offset = selection.offset;
                     }
-
-                    editor_buffer_edit_end(editor, active_buffer, buffer);
                 } break;
 
                 default:
@@ -1303,6 +1290,8 @@ editor_command_execute_signature
                     handled = false;
                 }
             }
+
+            editor_buffer_edit_end(editor, active_buffer, buffer);
         } break;
 
         cases_complete("focus %.*s", fs(editor_focus_names[editor->mode]));
@@ -2057,6 +2046,16 @@ editor_search_forward_signature
     return at;
 }
 
+editor_buffer_search_forward_signature
+{
+    string at = editor_search_forward(editor, buffer->text, offset, pattern);
+    if (at.base)
+    {
+        buffer->selection_start_offset = (u32) (at.base - buffer->text.base);
+        buffer->cursor_offset          = buffer->selection_start_offset + pattern.count;
+    }
+}
+
 editor_search_backward_signature
 {
     string left = { text.base, offset };
@@ -2068,6 +2067,16 @@ editor_search_backward_signature
     }
 
     return at;
+}
+
+editor_buffer_search_backward_signature
+{
+    string at = editor_search_backward(editor, buffer->text, offset, pattern);
+    if (at.base)
+    {
+        buffer->selection_start_offset = (u32) (at.base - buffer->text.base);
+        buffer->cursor_offset          = buffer->selection_start_offset + pattern.count;
+    }
 }
 
 editor_mode_set_signature
