@@ -3,7 +3,6 @@ simple minimal text editor for programming using C and molib
 
 # todo
 
-- copy/paste
 - undo/redo
 - detect and preserve line endings (currently saves buffers out with \r\n line endings)
 - search
@@ -19,6 +18,7 @@ simple minimal text editor for programming using C and molib
 - split view
   - multi window?
 - selection with multiple cursors?
+- copy/paste to OS buffer (editor internal copy paste works)
 
 # usage
 
@@ -74,6 +74,9 @@ The editor automatically inserts and removes tabs when adding or removing lines 
 - shift+tab : remove current line leading tab
 - page down : move down by visible line count
 - page up : move up by visible line count
+- ctrl+C : copy selection if it is < 64k bytes and add it to last 16 copies
+- ctrl+V : paste active slot from the last 16 copies
+- ctrl+shift+V : cycle to previous copy on repeated paste and paste it in
 
 # file extensions
 
@@ -82,12 +85,15 @@ It contains a space separated list of extensions the editor will open as text fi
 You can make changes to the file, however the editor only checks for file extensions at start up.
 
 # build
+
 This project uses the C single header libraries molib as a git submodule.
 
 ## initial build
+
 1. Checkout the repository with `git clone --recurse-submodules https://github.com/amooseinaroom/moed.git`.
 2. In Visual Studio x64 Command Prompt run `build.bat`.
 
 ## continuous build
+
 1. Pull the latest changes with `git pull --recurse-submodules`
 2. In Visual Studio x64 Command Prompt run `build.bat`

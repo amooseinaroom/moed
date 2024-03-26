@@ -23,9 +23,9 @@ string string31_to_string(string31 text)
 
 string31 string31_from_string(string text)
 {
-    assert(text.count <= 31);
-
     string31 result;
+    assert(text.count <= carray_count(result.base));
+
     result.count = (u8) text.count;
     memcpy(result.base, text.base, result.count);
 
@@ -47,9 +47,33 @@ string string255_to_string(string255 text)
 
 string255 string255_from_string(string text)
 {
-    assert(text.count <= 255);
-
     string255 result;
+    assert(text.count <= carray_count(result.base));
+
+    result.count = (u8) text.count;
+    memcpy(result.base, text.base, result.count);
+
+    return result;
+}
+
+typedef struct
+{
+    u8  base[(64 << 10) - 2];
+    u16 count;
+} string64k;
+
+array_type(string64k_array, string64k);
+
+string string64k_to_string(string64k text)
+{
+    return sl(string) { text.base, (usize) text.count };
+}
+
+string64k string64k_from_string(string text)
+{
+    string64k result;
+    assert(text.count <= carray_count(result.base));
+
     result.count = (u8) text.count;
     memcpy(result.base, text.base, result.count);
 
@@ -120,6 +144,10 @@ typedef enum
 
     editor_command_tag_select_cancel,
 
+    editor_command_tag_copy,
+    editor_command_tag_paste,
+    editor_command_tag_paste_cycle,
+
     editor_command_tag_count,
 } editor_command_tag;
 
@@ -137,8 +165,8 @@ typedef union
     };
 } editor_character_mask;
 
-const editor_character_mask editor_character_mask_all            = { (u8) 0x1111 };
-const editor_character_mask editor_character_mask_optional_shift = { (u8) 0b1011 };
+const editor_character_mask editor_character_mask_all            = { 0b1111 };
+const editor_character_mask editor_character_mask_optional_shift = { 0b1011 };
 
 #define editor_focus_list(macro, ...) \
     macro(buffer, __VA_ARGS__) \
@@ -176,6 +204,16 @@ typedef struct
 
 typedef struct
 {
+    string64k base[16];
+    u32       next;
+    u32       active;
+    u8        count;
+    b8        was_used;
+    b8        was_used_previously;
+} editor_ringbuffer64k;
+
+typedef struct
+{
     moma_arena memory;
 
     // in order of allocation from memory
@@ -185,9 +223,10 @@ typedef struct
     u32 active_buffer_index;
     u32 tab_space_count;
 
-
     editor_command commands[512];
     u32            command_count;
+
+    editor_ringbuffer64k copy_buffer;
 
     editor_focus mode;
     editor_focus focus;
@@ -333,6 +372,12 @@ editor_selection_get_signature;
 #define editor_selection_remove_signature b8 editor_selection_remove(editor_state *editor, editor_editable_buffer *buffer)
 editor_selection_remove_signature;
 
+#define editor_editable_buffer_begin_signature editor_editable_buffer editor_editable_buffer_begin(editor_state *editor)
+editor_editable_buffer_begin_signature;
+
+#define editor_editable_buffer_end_signature void editor_editable_buffer_end(editor_state *editor, editor_editable_buffer buffer)
+editor_editable_buffer_end_signature;
+
 const string editor_file_extension_list_path = sc("moed_file_extensions.txt");
 
 void editor_init(editor_state *editor, mop_platform *platform)
@@ -464,6 +509,22 @@ void editor_init(editor_state *editor, mop_platform *platform)
         command->character.is_symbol = true;
         command->character.with_shift = true;
         command->character.with_control = true;
+
+        command = editor_command_add(editor, ~0, editor_command_tag_copy);
+        command->check_mask = editor_character_mask_all;
+        command->character.code = 'C';
+        command->character.with_control = true;
+
+        command = editor_command_add(editor, ~0, editor_command_tag_paste);
+        command->check_mask = editor_character_mask_all;
+        command->character.code = 'V';
+        command->character.with_control = true;
+
+        command = editor_command_add(editor, ~0, editor_command_tag_paste_cycle);
+        command->check_mask = editor_character_mask_all;
+        command->character.code = 'V';
+        command->character.with_shift  = true;
+        command->character.with_control = true;
     }
 
     // editor_focus_search and editor_focus_search_replace
@@ -576,6 +637,8 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
         // TODO: is this still valid?
         assert((editor->mode != editor_focus_buffer) || (editor->mode == editor->focus));
 
+        editor->copy_buffer.was_used = false;
+
         b8 found_command = false;
         for (u32 command_index = 0; command_index < editor->command_count; command_index++)
         {
@@ -588,34 +651,12 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
             }
         }
 
+        editor->copy_buffer.was_used_previously = editor->copy_buffer.was_used;
+
         if (found_command)
             continue;
 
-        editor_editable_buffer buffer;
-        switch (editor->focus)
-        {
-            case editor_focus_buffer:
-            {
-                buffer = editor_buffer_edit_begin(editor, active_buffer);
-            } break;
-
-            case editor_focus_file_search:
-            {
-                buffer = editor_buffer255_edit_begin(editor, &editor->file_open_relative_path);
-            } break;
-
-            case editor_focus_search:
-            {
-                buffer = editor_buffer255_edit_begin(editor, &editor->search_buffer);
-            } break;
-
-            case editor_focus_search_replace:
-            {
-                buffer = editor_buffer255_edit_begin(editor, &editor->search_replace_buffer);
-            } break;
-
-            cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
-        }
+        editor_editable_buffer buffer = editor_editable_buffer_begin(editor);
 
         if (!character.is_symbol)
         {
@@ -861,30 +902,7 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
                 buffer.selection_start_offset = buffer.cursor_offset;
         }
 
-        switch (editor->focus)
-        {
-            case editor_focus_buffer:
-            {
-                editor_buffer_edit_end(editor, active_buffer, buffer);
-            } break;
-
-            case editor_focus_file_search:
-            {
-                editor_buffer255_edit_end(editor, &editor->file_open_relative_path, buffer);
-            } break;
-
-            case editor_focus_search:
-            {
-                editor_buffer255_edit_end(editor, &editor->search_buffer, buffer);
-            } break;
-
-            case editor_focus_search_replace:
-            {
-                editor_buffer255_edit_end(editor, &editor->search_replace_buffer, buffer);
-            } break;
-
-            cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
-        }
+        editor_editable_buffer_end(editor, buffer);
     }
 
     switch (editor->focus)
@@ -1397,6 +1415,65 @@ editor_command_execute_signature
 
                 editor_buffer_save_file(platform, editor, buffer_index);
             }
+        } break;
+
+        case editor_command_tag_copy:
+        {
+            editor_editable_buffer buffer = editor_editable_buffer_begin(editor);
+            editor_selection selection = editor_selection_get(editor, &buffer);
+
+            if (!selection.count)
+                break;
+
+            string64k *slot = &editor->copy_buffer.base[editor->copy_buffer.next];
+
+            // HACK:
+            if (selection.count > carray_count(slot->base))
+                break;
+
+            editor->copy_buffer.active = editor->copy_buffer.next;
+            editor->copy_buffer.next   = (editor->copy_buffer.next + 1) % carray_count(editor->copy_buffer.base);
+            editor->copy_buffer.count  = min(editor->copy_buffer.count + 1, carray_count(editor->copy_buffer.base));
+
+            slot->count = selection.count;
+            memcpy(slot->base, buffer.text.base + selection.offset, selection.count);
+        } break;
+
+        case editor_command_tag_paste:
+        case editor_command_tag_paste_cycle:
+        {
+            if (!editor->copy_buffer.count)
+                break;
+
+            editor_editable_buffer buffer = editor_editable_buffer_begin(editor);
+            editor_selection selection = editor_selection_get(editor, &buffer);
+
+            if (editor->copy_buffer.was_used_previously && (command_tag == editor_command_tag_paste_cycle))
+            {
+                u32 active = (editor->copy_buffer.active + editor->copy_buffer.count - 1) % editor->copy_buffer.count;
+                assert(editor->copy_buffer.base[active].count);
+
+                string64k slot = editor->copy_buffer.base[editor->copy_buffer.active];
+                assert(slot.count);
+                buffer.cursor_offset          -= slot.count;
+                buffer.selection_start_offset  = buffer.cursor_offset;
+                editor_remove(editor, &buffer, buffer.cursor_offset, slot.count);
+
+                editor->copy_buffer.active = active;
+            }
+
+            string64k slot = editor->copy_buffer.base[editor->copy_buffer.active];
+            assert(slot.count);
+
+            editor_selection_remove(editor, &buffer);
+            editor_insert(editor, &buffer, buffer.cursor_offset, string64k_to_string(slot));
+
+            buffer.cursor_offset          += slot.count;
+            buffer.selection_start_offset  = buffer.cursor_offset;
+
+            editor_editable_buffer_end(editor, buffer);
+
+            editor->copy_buffer.was_used = true;
         } break;
 
         cases_complete("command tag %i", command_tag);
@@ -1958,5 +2035,66 @@ editor_mode_set_signature
         editor->mode = mode;
         editor->focus = mode;
         editor->previous_focus = editor_focus_buffer;
+    }
+}
+
+editor_editable_buffer_begin_signature
+{
+    editor_editable_buffer buffer;
+    switch (editor->focus)
+    {
+        case editor_focus_buffer:
+        {
+            editor_buffer *active_buffer = editor_active_buffer_get(editor);
+            buffer = editor_buffer_edit_begin(editor, active_buffer);
+        } break;
+
+        case editor_focus_file_search:
+        {
+            buffer = editor_buffer255_edit_begin(editor, &editor->file_open_relative_path);
+        } break;
+
+        case editor_focus_search:
+        {
+            buffer = editor_buffer255_edit_begin(editor, &editor->search_buffer);
+        } break;
+
+        case editor_focus_search_replace:
+        {
+            buffer = editor_buffer255_edit_begin(editor, &editor->search_replace_buffer);
+        } break;
+
+        cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
+    }
+
+    return buffer;
+}
+
+editor_editable_buffer_end_signature
+{
+    switch (editor->focus)
+    {
+        case editor_focus_buffer:
+        {
+            editor_buffer *active_buffer = editor_active_buffer_get(editor);
+            editor_buffer_edit_end(editor, active_buffer, buffer);
+        } break;
+
+        case editor_focus_file_search:
+        {
+            editor_buffer255_edit_end(editor, &editor->file_open_relative_path, buffer);
+        } break;
+
+        case editor_focus_search:
+        {
+            editor_buffer255_edit_end(editor, &editor->search_buffer, buffer);
+        } break;
+
+        case editor_focus_search_replace:
+        {
+            editor_buffer255_edit_end(editor, &editor->search_replace_buffer, buffer);
+        } break;
+
+        cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
     }
 }
