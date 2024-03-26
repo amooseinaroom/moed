@@ -501,6 +501,7 @@ mop_hot_update_signature
     {
         editor_editable_buffer editable_buffer = editor_buffer_edit_begin(editor, active_buffer);
 
+        string text = editable_buffer.text;
         editable_buffer.text = mos_remaining_substring(editable_buffer.text, active_buffer->draw_line_offset);
 
         assert(editable_buffer.cursor_offset >= active_buffer->draw_line_offset);
@@ -517,6 +518,7 @@ mop_hot_update_signature
 
         render_single_line_text(ui, font, &draw_cursor, &editable_buffer, program->settings, &program->memory);
 
+        editable_buffer.text                   = text;
         editable_buffer.cursor_offset          = editable_buffer.cursor_offset + active_buffer->draw_line_offset;
         editable_buffer.selection_start_offset = editable_buffer.selection_start_offset + active_buffer->draw_line_offset;
 

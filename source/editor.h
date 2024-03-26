@@ -5,6 +5,12 @@
 #include "mo_memory_arena.h"
 #include "mo_string.h"
 
+#if defined mop_debug
+
+#define editor_enable_sanity_check
+
+#endif
+
 // TODO: 8 MB per file for now
 #define editor_buffer_byte_count (8 << 20)
 
@@ -377,6 +383,9 @@ editor_editable_buffer_begin_signature;
 
 #define editor_editable_buffer_end_signature void editor_editable_buffer_end(editor_state *editor, editor_editable_buffer buffer)
 editor_editable_buffer_end_signature;
+
+#define editor_edit_sanity_check_signature void editor_edit_sanity_check(editor_editable_buffer buffer)
+editor_edit_sanity_check_signature;
 
 const string editor_file_extension_list_path = sc("moed_file_extensions.txt");
 
@@ -998,6 +1007,9 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
             if (active_buffer->draw_line_offset < buffer.cursor_offset)
                 active_buffer->draw_line_offset = buffer.cursor_offset;
         }
+
+        assert(!active_buffer->draw_line_offset || (active_buffer->base[active_buffer->draw_line_offset - 1] == '\n'));
+        assert(active_buffer->draw_line_offset <= active_buffer->cursor_offset);
 
         // buffer.cursor_offset = cursor_offset;
     }
@@ -1638,6 +1650,33 @@ editor_directory_load_all_files_signature
     return result_buffer_index;
 }
 
+editor_edit_sanity_check_signature
+{
+    // sanity check:
+#if defined editor_enable_sanity_check
+    {
+        string text = buffer.text;
+        b8 found_cursor_offset          = false;
+        b8 found_selection_start_offset = false;
+
+        u32 offset = 0;
+        while (text.count)
+        {
+            found_cursor_offset          |= (offset == buffer.cursor_offset);
+            found_selection_start_offset |= (offset == buffer.selection_start_offset);
+
+            mos_utf8_result result = mos_utf8_advance(&text);
+            offset += result.byte_count;
+        }
+
+        found_cursor_offset          |= (offset == buffer.cursor_offset);
+        found_selection_start_offset |= (offset == buffer.selection_start_offset);
+
+        assert(found_cursor_offset && found_selection_start_offset);
+    }
+#endif
+}
+
 editor_buffer_edit_begin_signature
 {
     editor_editable_buffer result = {0};
@@ -1657,6 +1696,8 @@ editor_buffer_edit_end_signature
 {
     assert(editable_buffer.text.count <= carray_count(buffer->base));
     assert(editable_buffer.cursor_offset <= carray_count(buffer->base));
+
+    editor_edit_sanity_check(editable_buffer);
 
     buffer->count                   = editable_buffer.text.count;
     buffer->cursor_offset           = editable_buffer.cursor_offset;
@@ -1683,6 +1724,8 @@ editor_buffer255_edit_end_signature
 {
     assert(editable_buffer.text.count <= carray_count(buffer->text.base));
     assert(editable_buffer.cursor_offset <= carray_count(buffer->text.base));
+
+    editor_edit_sanity_check(editable_buffer);
 
     buffer->text.count              = editable_buffer.text.count;
     buffer->cursor_offset           = editable_buffer.cursor_offset;
