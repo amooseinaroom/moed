@@ -86,6 +86,11 @@ string64k string64k_from_string(string text)
     return result;
 }
 
+typedef struct
+{
+    u32 i;
+} editor_undo;
+
 // all counts and offsets are in bytes unless specified otherwise
 typedef struct
 {
@@ -372,13 +377,13 @@ editor_get_absolute_path_signature;
 #define editor_get_relative_path_signature string editor_get_relative_path(u8_array buffer, mop_platform *platform, string absolute_path)
 editor_get_relative_path_signature;
 
-#define editor_command_add_signature editor_command * editor_command_add(editor_state *editor, u32 focus_mask, editor_command_tag tag)
+#define editor_command_add_signature editor_command * editor_command_add(editor_state *editor, u32 focus_mask, editor_command_tag tag, u32 symbol_code)
 editor_command_add_signature;
 
 #define editor_mode_set_signature void editor_mode_set(editor_state *editor, editor_focus mode)
 editor_mode_set_signature;
 
-#define editor_selection_get_signature editor_selection editor_selection_get(editor_state *editor, editor_editable_buffer *buffer)
+#define editor_selection_get_signature editor_selection editor_selection_get(editor_state *editor, editor_editable_buffer buffer)
 editor_selection_get_signature;
 
 #define editor_selection_remove_signature b8 editor_selection_remove(editor_state *editor, editor_editable_buffer *buffer)
@@ -390,7 +395,7 @@ editor_editable_buffer_begin_signature;
 #define editor_editable_buffer_end_signature void editor_editable_buffer_end(editor_state *editor, editor_editable_buffer buffer)
 editor_editable_buffer_end_signature;
 
-#define editor_edit_sanity_check_signature void editor_edit_sanity_check(editor_editable_buffer buffer)
+#define editor_edit_sanity_check_signature void editor_edit_sanity_check(editor_state *editor, editor_editable_buffer buffer)
 editor_edit_sanity_check_signature;
 
 const string editor_file_extension_list_path = sc("moed_file_extensions.txt");
@@ -470,74 +475,45 @@ void editor_init(editor_state *editor, mop_platform *platform)
 
     // editor_focus_buffer
     {
-        editor_command *command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_save);
-        command->character.code = 'S';
-        command->check_mask = editor_character_mask_all;
+        editor_command *command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_save, 'S');
         command->character.with_control = true;
 
-        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_save_all);
-        command->character.code = 'S';
-        command->check_mask = editor_character_mask_all;
+        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_save_all, 'S');
         command->character.with_shift = true;
         command->character.with_control = true;
 
-        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_reload);
-        command->character.code = 'P';
-        command->check_mask = editor_character_mask_all;
+        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_reload, 'P');
         command->character.with_shift = true;
         command->character.with_control = true;
 
-        command = editor_command_add(editor, ~0, editor_command_tag_focus_buffer);
-        command->character.code = ' ';
-        command->check_mask = editor_character_mask_all;
+        command = editor_command_add(editor, ~0, editor_command_tag_focus_buffer, ' ');
         command->character.with_control = true;
 
-        command = editor_command_add(editor, ~0, editor_command_tag_select_cancel);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_escape;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, ~0, editor_command_tag_select_cancel, mop_character_symbol_escape);
 
-        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_file_search), editor_command_tag_file_open);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = 'P';
+        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_file_search), editor_command_tag_file_open, 'P');
         command->character.with_control = true;
 
-        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_search) | flag32(editor_focus_search_replace), editor_command_tag_focus_search);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = 'F';
+        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_search) | flag32(editor_focus_search_replace), editor_command_tag_focus_search, 'F');
         command->character.with_control = true;
 
-        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_search) | flag32(editor_focus_search_replace), editor_command_tag_focus_search_replace);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = 'R';
+        command = editor_command_add(editor, flag32(editor_focus_buffer) | flag32(editor_focus_search) | flag32(editor_focus_search_replace), editor_command_tag_focus_search_replace, 'R');
         command->character.with_control = true;
 
-        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_next);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_tabulator;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_next, mop_character_symbol_tabulator);
         command->character.with_control = true;
 
-        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_previous);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_tabulator;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_buffer), editor_command_tag_buffer_previous, mop_character_symbol_tabulator);
         command->character.with_shift = true;
         command->character.with_control = true;
 
-        command = editor_command_add(editor, ~0, editor_command_tag_copy);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = 'C';
+        command = editor_command_add(editor, ~0, editor_command_tag_copy, 'C');
         command->character.with_control = true;
 
-        command = editor_command_add(editor, ~0, editor_command_tag_paste);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = 'V';
+        command = editor_command_add(editor, ~0, editor_command_tag_paste, 'V');
         command->character.with_control = true;
 
-        command = editor_command_add(editor, ~0, editor_command_tag_paste_cycle);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = 'V';
+        command = editor_command_add(editor, ~0, editor_command_tag_paste_cycle, 'V');
         command->character.with_shift  = true;
         command->character.with_control = true;
     }
@@ -546,87 +522,45 @@ void editor_init(editor_state *editor, mop_platform *platform)
     {
         u32 focus_search_or_replace_mask = flag32(editor_focus_search) | flag32(editor_focus_search_replace);
 
-        editor_command *command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_next);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_down;
-        command->character.is_symbol = true;
+        editor_command *command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_next, mop_character_symbol_down);
 
-        command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_previous);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_up;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_previous, mop_character_symbol_up);
 
-        command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_last);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_down;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_last, mop_character_symbol_down);
         command->character.with_control = true;
 
-        command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_first);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_up;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, focus_search_or_replace_mask, editor_command_tag_select_first, mop_character_symbol_up);
         command->character.with_control = true;
 
         // search only
 
-        command = editor_command_add(editor, flag32(editor_focus_search), editor_command_tag_select_accept);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_return;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_search), editor_command_tag_select_accept, mop_character_symbol_return);
 
-        command = editor_command_add(editor, flag32(editor_focus_search), editor_command_tag_select_accept_all);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_return;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_search), editor_command_tag_select_accept_all, mop_character_symbol_return);
         command->character.with_control = true;
 
         // replace only
 
-        command = editor_command_add(editor, flag32(editor_focus_search_replace), editor_command_tag_select_accept);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_return;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_search_replace), editor_command_tag_select_accept, mop_character_symbol_return);
 
-        command = editor_command_add(editor, flag32(editor_focus_search_replace), editor_command_tag_select_accept_all);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_return;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_search_replace), editor_command_tag_select_accept_all, mop_character_symbol_return);
         command->character.with_control = true;
     }
 
     // editor_focus_file_search
     {
-        editor_command *command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_next);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_down;
-        command->character.is_symbol = true;
+        editor_command *command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_next, mop_character_symbol_down);
 
-        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_previous);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_up;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_previous, mop_character_symbol_up);
 
-        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_push);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_tabulator;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_push, mop_character_symbol_tabulator);
 
-        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_pop);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_tabulator;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_pop, mop_character_symbol_tabulator);
         command->character.with_shift = true;
 
-        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_accept);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_return;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_accept, mop_character_symbol_return);
 
-        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_accept_all);
-        command->check_mask = editor_character_mask_all;
-        command->character.code = mop_character_symbol_return;
-        command->character.is_symbol = true;
+        command = editor_command_add(editor, flag32(editor_focus_file_search), editor_command_tag_select_accept_all, mop_character_symbol_return);
         command->character.with_control = true;
     }
 
@@ -1050,8 +984,12 @@ editor_command_add_signature
     *command = sl(editor_command) {0};
     editor->command_count += 1;
 
+    command->check_mask = editor_character_mask_all;
     command->focus_mask = focus_mask;
     command->tag        = tag;
+
+    command->character.is_symbol = true;
+    command->character.code      = symbol_code;
 
     return command;
 }
@@ -1106,8 +1044,9 @@ editor_command_execute_signature
                         text->count += 1;
                     }
 
-                    editor->file_open_relative_path.cursor_offset = text->count;
-                    editor->file_open_relative_path.has_changed   = true;
+                    editor->file_open_relative_path.cursor_offset          = text->count;
+                    editor->file_open_relative_path.selection_start_offset = editor->file_open_relative_path.cursor_offset;
+                    editor->file_open_relative_path.has_changed            = true;
                 } break;
 
                 case editor_command_tag_select_pop:
@@ -1129,9 +1068,10 @@ editor_command_execute_signature
                         assert(path.base[path.count - 1] == '/');
                     }
 
-                    buffer->text = string255_from_string(path);
-                    buffer->cursor_offset = buffer->text.count;
-                    buffer->has_changed = true;
+                    buffer->text                   = string255_from_string(path);
+                    buffer->cursor_offset          = buffer->text.count;
+                    buffer->selection_start_offset = buffer->cursor_offset;
+                    buffer->has_changed            = true;
                 } break;
 
                 case editor_command_tag_select_accept:
@@ -1213,13 +1153,13 @@ editor_command_execute_signature
 
                 case editor_command_tag_select_next:
                 {
-                    editor_selection selection = editor_selection_get(editor, &buffer);
+                    editor_selection selection = editor_selection_get(editor, buffer);
                     editor_buffer_search_forward(editor, &buffer, selection.offset + 1, pattern);
                 } break;
 
                 case editor_command_tag_select_previous:
                 {
-                    editor_selection selection = editor_selection_get(editor, &buffer);
+                    editor_selection selection = editor_selection_get(editor, buffer);
                     editor_buffer_search_backward(editor, &buffer, selection.offset, pattern);
                 } break;
 
@@ -1266,7 +1206,7 @@ editor_command_execute_signature
                     }
                     else
                     {
-                        editor_selection selection = editor_selection_get(editor, &buffer);
+                        editor_selection selection = editor_selection_get(editor, buffer);
 
                         // break if we don't have a match
                         {
@@ -1323,7 +1263,8 @@ editor_command_execute_signature
                     editor_mode_set(editor, editor_focus_buffer);
 
                     editor_buffer *active_buffer = editor_active_buffer_get(editor);
-                    active_buffer->cursor_offset = editor->search_start_cursor_offset;
+                    active_buffer->cursor_offset          = editor->search_start_cursor_offset;
+                    active_buffer->selection_start_offset = active_buffer->cursor_offset;
                 } break;
 
                 cases_complete("mode %.*s", fs(editor_focus_names[editor->mode]));
@@ -1353,6 +1294,8 @@ editor_command_execute_signature
             {
                 editor_mode_set(editor, editor_focus_file_search);
                 editor->file_open_relative_path.has_changed = true; // force a search
+                editor->file_open_relative_path.cursor_offset          = 0;
+                editor->file_open_relative_path.selection_start_offset = editor->file_open_relative_path.text.count;
             }
         } break;
 
@@ -1368,7 +1311,21 @@ editor_command_execute_signature
             }
 
             if (editor->mode < target_focus)
+            {
                 editor_mode_set(editor, target_focus);
+
+                if (target_focus == editor_focus_search_replace)
+                {
+                    editor->search_replace_buffer.cursor_offset          = 0;
+                    editor->search_replace_buffer.selection_start_offset = editor->search_replace_buffer.text.count;
+                }
+
+                if (editor->mode < editor_focus_search)
+                {
+                    editor->search_buffer.cursor_offset          = 0;
+                    editor->search_buffer.selection_start_offset = editor->search_buffer.text.count;
+                }
+            }
 
             editor->focus = target_focus;
             editor->search_buffer.has_changed = true; // force a search
@@ -1421,7 +1378,7 @@ editor_command_execute_signature
         case editor_command_tag_copy:
         {
             editor_editable_buffer buffer = editor_editable_buffer_begin(editor);
-            editor_selection selection = editor_selection_get(editor, &buffer);
+            editor_selection selection = editor_selection_get(editor, buffer);
 
             if (!selection.count)
                 break;
@@ -1447,7 +1404,7 @@ editor_command_execute_signature
                 break;
 
             editor_editable_buffer buffer = editor_editable_buffer_begin(editor);
-            editor_selection selection = editor_selection_get(editor, &buffer);
+            editor_selection selection = editor_selection_get(editor, buffer);
 
             if (editor->copy_buffer.was_used_previously && (command_tag == editor_command_tag_paste_cycle))
             {
@@ -1663,6 +1620,9 @@ editor_edit_sanity_check_signature
 
         assert(found_cursor_offset && found_selection_start_offset);
     }
+
+    // assert selection is in bounds
+    editor_selection_get(editor, buffer);
 #endif
 }
 
@@ -1686,7 +1646,7 @@ editor_buffer_edit_end_signature
     assert(editable_buffer.text.count <= carray_count(buffer->base));
     assert(editable_buffer.cursor_offset <= carray_count(buffer->base));
 
-    editor_edit_sanity_check(editable_buffer);
+    editor_edit_sanity_check(editor, editable_buffer);
 
     buffer->count                   = editable_buffer.text.count;
     buffer->cursor_offset           = editable_buffer.cursor_offset;
@@ -1714,7 +1674,7 @@ editor_buffer255_edit_end_signature
     assert(editable_buffer.text.count <= carray_count(buffer->text.base));
     assert(editable_buffer.cursor_offset <= carray_count(buffer->text.base));
 
-    editor_edit_sanity_check(editable_buffer);
+    editor_edit_sanity_check(editor, editable_buffer);
 
     buffer->text.count              = editable_buffer.text.count;
     buffer->cursor_offset           = editable_buffer.cursor_offset;
@@ -1725,23 +1685,26 @@ editor_buffer255_edit_end_signature
 editor_selection_get_signature
 {
     editor_selection selection;
-    if (buffer->selection_start_offset <= buffer->cursor_offset)
+    if (buffer.selection_start_offset <= buffer.cursor_offset)
     {
-        selection.offset = buffer->selection_start_offset;
-        selection.count  = buffer->cursor_offset - buffer->selection_start_offset;
+        selection.offset = buffer.selection_start_offset;
+        selection.count  = buffer.cursor_offset - buffer.selection_start_offset;
     }
     else
     {
-        selection.offset = buffer->cursor_offset;
-        selection.count  = buffer->selection_start_offset - buffer->cursor_offset;
+        selection.offset = buffer.cursor_offset;
+        selection.count  = buffer.selection_start_offset - buffer.cursor_offset;
     }
+
+    assert(selection.offset                   <= buffer.text.count);
+    assert(selection.offset + selection.count <= buffer.text.count);
 
     return selection;
 }
 
 editor_selection_remove_signature
 {
-    editor_selection selection = editor_selection_get(editor, buffer);
+    editor_selection selection = editor_selection_get(editor, *buffer);
     editor_remove(editor, buffer, selection.offset, selection.count);
 
     buffer->cursor_offset          = selection.offset;

@@ -152,7 +152,7 @@ int main(int argument_count, char *arguments[])
     program->random = random_from_win23();
 
     // allocate font
-    s32 pixel_height = 22;
+    s32 pixel_height = 18;
     s32 thickness    = 2;
     // program->font = moui_load_outlined_font_file(&platform, &program->memory, s("C:/windows/fonts/consola.ttf"), 1024, 1024, pixel_height, ' ', 96, thickness, moui_rgba_white, moui_rgba_black);
     program->font = moui_load_font_file(&platform, &program->memory, s("C:/windows/fonts/consola.ttf"), 1024, 1024, pixel_height, ' ', 96);
