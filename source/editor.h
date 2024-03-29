@@ -88,8 +88,18 @@ string64k string64k_from_string(string text)
 
 typedef struct
 {
-    u32 i;
-} editor_undo;
+    u32 offset;
+    u32 count;
+    b8  is_insert;
+    u8  base;
+} editor_undo_entry;
+
+typedef struct
+{
+    u8  buffer[(64 << 20) - 8];
+    u32 head_byte_offset;
+    u32 tail_byte_offset;
+} editor_undo_ringbuffer;
 
 // all counts and offsets are in bytes unless specified otherwise
 typedef struct
@@ -179,14 +189,31 @@ typedef union
 const editor_character_mask editor_character_mask_all            = { 0b1111 };
 const editor_character_mask editor_character_mask_optional_shift = { 0b1011 };
 
-#define editor_focus_list(macro, ...) \
+#define editor_list_focus(macro, ...) \
     macro(buffer, __VA_ARGS__) \
     macro(file_search, __VA_ARGS__) \
     macro(search, __VA_ARGS__) \
     macro(search_replace, __VA_ARGS__) \
 
-mo_enum_list(editor_focus,         editor_focus_list);
-mo_string_list(editor_focus_names, editor_focus_list);
+mo_enum_list(editor_focus,         editor_list_focus);
+mo_string_list(editor_focus_names, editor_list_focus);
+
+#define editor_list_token(macro, ...) \
+    macro(empty, __VA_ARGS__) \
+    macro(space, __VA_ARGS__) \
+    macro(name, __VA_ARGS__) \
+    macro(number, __VA_ARGS__) \
+    macro(symbol, __VA_ARGS__) \
+    macro(string, __VA_ARGS__) \
+
+mo_enum_list(editor_token_tag,         editor_list_token);
+mo_string_list(editor_token_names, editor_list_token);
+
+typedef struct
+{
+    editor_token_tag tag;
+    string           text;
+} editor_token;
 
 typedef struct
 {
@@ -353,6 +380,9 @@ editor_buffer_move_right_within_line_signature;
 #define editor_buffer_count_right_spaces_signature u32 editor_buffer_count_right_spaces(editor_state *editor, editor_editable_buffer *buffer)
 editor_buffer_count_right_spaces_signature;
 
+#define editor_buffer_to_current_token_start_signature editor_token editor_buffer_to_current_token_start(editor_state *editor, editor_editable_buffer *buffer)
+editor_buffer_to_current_token_start_signature;
+
 #define editor_file_search_filter_get_signature void editor_file_search_filter_get(editor_file_search_filter *filter, mop_platform *platform, string relative_path)
 editor_file_search_filter_get_signature;
 
@@ -397,6 +427,12 @@ editor_editable_buffer_end_signature;
 
 #define editor_edit_sanity_check_signature void editor_edit_sanity_check(editor_state *editor, editor_editable_buffer buffer)
 editor_edit_sanity_check_signature;
+
+#define editor_undo_push_signature void editor_undo_push(editor_state *editor, editor_undo_ringbuffer *undo, u32 offset, string text, b8 is_insert)
+editor_undo_push_signature;
+
+#define editor_token_advance_signature editor_token editor_token_advance(editor_state *editor, string *iterator)
+editor_token_advance_signature;
 
 const string editor_file_extension_list_path = sc("moed_file_extensions.txt");
 
@@ -651,14 +687,26 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
                     mos_utf8_result result = editor_buffer_move_left(editor, &buffer);
 
+                    // delete trainlin spaces on current line
                     if (result.utf32_code == '\n')
                     {
                         buffer.cursor_offset += 1;
                         result.byte_count += editor_buffer_count_right_spaces(editor, &buffer);
                         buffer.cursor_offset -= 1;
-                    }
 
-                    editor_remove(editor, &buffer, buffer.cursor_offset, result.byte_count);
+                        editor_remove(editor, &buffer, buffer.cursor_offset, result.byte_count);
+                    }
+                    // delete left side of current token
+                    else if (character.with_control)
+                    {
+                        buffer.cursor_offset = cursor_offset;
+                        editor_buffer_to_current_token_start(editor, &buffer);
+                        editor_remove(editor, &buffer, buffer.cursor_offset, cursor_offset - buffer.cursor_offset);
+                    }
+                    else
+                    {
+                        editor_remove(editor, &buffer, buffer.cursor_offset, result.byte_count);
+                    }
                 } break;
 
                 case mop_character_symbol_delete:
@@ -669,15 +717,21 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
                     if (buffer.cursor_offset >= buffer.text.count)
                         break;
 
+                    u32 cursor_offset = buffer.cursor_offset;
+
                     mos_utf8_result result = editor_buffer_move_right(editor, &buffer);
 
-                    u32 space_count = 0;
                     if (result.utf32_code == '\n')
-                        space_count = editor_buffer_count_right_spaces(editor, &buffer);
+                        result.byte_count += editor_buffer_count_right_spaces(editor, &buffer);
+                    else if (character.with_control)
+                    {
+                        editor_token token = editor_buffer_to_current_token_start(editor, &buffer);
+                        result.byte_count = buffer.cursor_offset + token.text.count - cursor_offset;
+                    }
 
-                    buffer.cursor_offset -= result.byte_count; // move back left
+                    buffer.cursor_offset = cursor_offset; // don't move cursor
 
-                    editor_remove(editor, &buffer, buffer.cursor_offset, result.byte_count + space_count);
+                    editor_remove(editor, &buffer, buffer.cursor_offset, result.byte_count);
                 } break;
 
                 case mop_character_symbol_return:
@@ -710,12 +764,21 @@ void editor_update(editor_state *editor, mop_platform *platform, u32 visible_lin
 
                 case mop_character_symbol_left:
                 {
-                    editor_buffer_move_left(editor, &buffer);
+                    if (character.with_control)
+                        editor_buffer_to_current_token_start(editor, &buffer);
+                    else
+                        editor_buffer_move_left(editor, &buffer);
                 } break;
 
                 case mop_character_symbol_right:
                 {
                     editor_buffer_move_right(editor, &buffer);
+
+                    if (character.with_control)
+                    {
+                        editor_token token = editor_buffer_to_current_token_start(editor, &buffer);
+                        buffer.cursor_offset += token.text.count;
+                    }
                 } break;
 
                 case mop_character_symbol_up:
@@ -1876,6 +1939,35 @@ editor_buffer_count_right_spaces_signature
      return space_count;
 }
 
+editor_buffer_to_current_token_start_signature
+{
+    if (!editor_buffer_move_left(editor, buffer).byte_count)
+        return sl(editor_token) { editor_token_tag_empty, buffer->text };
+
+    string text = mos_remaining_substring(buffer->text, buffer->cursor_offset);
+    editor_token current_token = editor_token_advance(editor, &text);
+    u8 *current_token_end = current_token.text.base + current_token.text.count;
+
+    while (true)
+    {
+        if (!editor_buffer_move_left(editor, buffer).byte_count)
+            break;
+
+        string text = mos_remaining_substring(buffer->text, buffer->cursor_offset);
+        editor_token token = editor_token_advance(editor, &text);
+
+        if ((current_token.tag != token.tag) || (current_token_end != token.text.base + token.text.count))
+        {
+            editor_buffer_move_right(editor, buffer);
+            break;
+        }
+    }
+
+    current_token.text.base  = buffer->text.base + buffer->cursor_offset;
+    current_token.text.count = (usize) (current_token_end - current_token.text.base);
+    return current_token;
+}
+
 editor_get_absolute_path_signature
 {
     string working_directory = mop_get_working_directory(platform);
@@ -2112,4 +2204,97 @@ editor_editable_buffer_end_signature
 
         cases_complete("%.*s", fs(editor_focus_names[editor->focus]));
     }
+}
+
+editor_undo_push_signature
+{
+    assert(text.count);
+
+    u32 required_byte_count = sizeof(editor_undo_entry) + text.count - 1;
+    assert(required_byte_count <= carray_count(undo->buffer));
+
+    u32 next_tail_byte_offset = undo->tail_byte_offset + required_byte_count;
+    if ((undo->tail_byte_offset <= undo->head_byte_offset) && (undo->head_byte_offset < next_tail_byte_offset))
+    {
+        u32 free_byte_count = 0;
+        if (free_byte_count < required_byte_count)
+        {
+            editor_undo_entry *head = (editor_undo_entry *) undo->buffer + undo->head_byte_offset;
+
+            u32 head_byte_count = sizeof(*head) + head->count - 1;
+            free_byte_count += head_byte_count;
+            undo->head_byte_offset += head_byte_count;
+
+            if (undo->head_byte_offset >= carray_count(undo->buffer))
+                undo->head_byte_offset = 0;
+        }
+
+        undo->tail_byte_offset = undo->head_byte_offset - free_byte_count;
+    }
+
+    assert(undo->tail_byte_offset                       <  carray_count(undo->buffer));
+    assert(undo->tail_byte_offset + required_byte_count <= carray_count(undo->buffer));
+    editor_undo_entry *entry = (editor_undo_entry *) (undo->buffer + undo->tail_byte_offset);
+
+    entry->offset    = offset;
+    entry->count     = text.count;
+    entry->is_insert = is_insert;
+    memcpy(&entry->base, text.base, text.count);
+
+    undo->tail_byte_offset += required_byte_count;
+    if (undo->tail_byte_offset >= carray_count(undo->buffer))
+        undo->tail_byte_offset = 0;
+}
+
+editor_token_advance_signature
+{
+    if (!iterator->count)
+        return sl(editor_token) { editor_token_tag_empty, *iterator };
+
+    string start = *iterator;
+
+    if (mos_skip_white_space(iterator))
+        return sl(editor_token) { editor_token_tag_space, mos_substring_until_end(start, *iterator) };
+
+    f64 f64_value;
+    s64 s64_value;
+    u64 u64_value;
+    if (mos_parse_f64(&f64_value, iterator) || mos_parse_s64(&s64_value, iterator) || mos_parse_u64(&u64_value, iterator))
+        return sl(editor_token) { editor_token_tag_number, mos_substring_until_end(start, *iterator) };
+
+    if (mos_try_skip(iterator, s("\"")))
+    {
+        while (iterator->count)
+        {
+            u32 head = mos_utf8_advance(iterator).utf32_code;
+
+            if (iterator->count && (head == '\\'))
+                mos_utf8_advance(iterator);
+            else if (head == '"')
+                break;
+        }
+
+        return sl(editor_token) { editor_token_tag_string, mos_substring_until_end(start, *iterator) };
+    }
+
+    {
+        while (iterator->count)
+        {
+            u8 head = iterator->base[0];
+            if ((('a' <= head) && (head <= 'z')) ||
+                ('A' <= head) && (head <= 'Z') ||
+                ('0' <= head) && (head <= '9') ||
+                (head == '_'))
+                mos_advance(iterator, 1); // we know these are all 1 byte
+            else
+                break;
+        }
+
+        string name = mos_substring_until_end(start, *iterator);
+        if (name.count)
+            return sl(editor_token) { editor_token_tag_name, mos_substring_until_end(start, *iterator) };
+    }
+
+    mos_utf8_advance(iterator);
+    return sl(editor_token) { editor_token_tag_symbol, mos_substring_until_end(start, *iterator) };
 }

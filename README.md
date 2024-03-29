@@ -3,6 +3,7 @@ simple minimal text editor for programming using C and molib
 
 # todo
 
+- jump to line
 - undo/redo
 - detect and preserve line endings (currently saves buffers out with \r\n line endings)
 - search
@@ -39,6 +40,15 @@ Some examples:
 # key bindings
 
 The editor automatically inserts and removes tabs when adding or removing lines and tries to remove trailing spaces.
+
+Holding down shift while navigating preserves the start of the selection.
+
+Holding down control while navigating or deleting moves by simple tokens like:
+- number
+- quoted string
+- name
+- single character symbol
+- white space
 
 - ctrl+S : save active buffer
 - ctrl+shift+P : reload active buffer
