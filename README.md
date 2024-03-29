@@ -25,7 +25,7 @@ simple minimal text editor for programming using C and molib
 
 You can launch the editor in the command line to specify what relative files and directories you want to be loaded at start.
 This will load all files inside directories without recursion.
-Warning: Absolut file paths are currently not properly supported.
+Warning: Absolute file paths are currently not properly supported.
 
 If you don't give any arguments via command line, the editor does not load any files at start.
 
@@ -47,10 +47,10 @@ Holding down control while navigating or deleting moves by simple tokens.
 
 Tokens:
   - number
-  - quoted string
-  - name
-  - single character symbol
-  - white space
+  - double quoted string
+  - single character symbol: `!"#$%&'()*+,-./:;<=>?@[\\]^\`{|}~`
+  - white space: `\\t\\n\\r`
+  - name: letters are everything that are not symbols, white space or digits
 
 Key bindings:
 - ctrl+S : save active buffer

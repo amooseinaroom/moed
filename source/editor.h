@@ -2278,19 +2278,7 @@ editor_token_advance_signature
     }
 
     {
-        while (iterator->count)
-        {
-            u8 head = iterator->base[0];
-            if ((('a' <= head) && (head <= 'z')) ||
-                ('A' <= head) && (head <= 'Z') ||
-                ('0' <= head) && (head <= '9') ||
-                (head == '_'))
-                mos_advance(iterator, 1); // we know these are all 1 byte
-            else
-                break;
-        }
-
-        string name = mos_substring_until_end(start, *iterator);
+        string name = mos_skip_default_name(iterator);
         if (name.count)
             return sl(editor_token) { editor_token_tag_name, mos_substring_until_end(start, *iterator) };
     }
