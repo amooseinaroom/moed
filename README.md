@@ -1,6 +1,8 @@
 # moed
 simple minimal text editor for programming using C and molib
 
+![alt text](https://github.com/amooseinaroom/moed.git/blob/main/screenshot.png?raw=true)
+
 # todo
 
 - jump to line
