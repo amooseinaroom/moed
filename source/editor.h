@@ -201,6 +201,7 @@ mo_string_list(editor_focus_names, editor_list_focus);
 #define editor_list_token(macro, ...) \
     macro(empty, __VA_ARGS__) \
     macro(space, __VA_ARGS__) \
+    macro(newline, __VA_ARGS__) \
     macro(name, __VA_ARGS__) \
     macro(number, __VA_ARGS__) \
     macro(symbol, __VA_ARGS__) \
@@ -260,6 +261,7 @@ typedef struct
 
     u32 active_buffer_index;
     u32 tab_space_count;
+    b8 skip_quoated_string_tokens;
 
     editor_command commands[512];
     u32            command_count;
@@ -443,6 +445,7 @@ void editor_init(editor_state *editor, mop_platform *platform)
     moma_create(memory, platform, 1 << 30); // 1 gb
 
     editor->tab_space_count = 4;
+    editor->skip_quoated_string_tokens = true;
 
     editor->visible_line_count_top    = 5;
     editor->visible_line_count_bottom = editor->visible_line_count_top;
@@ -1941,8 +1944,38 @@ editor_buffer_count_right_spaces_signature
 
 editor_buffer_to_current_token_start_signature
 {
-    if (!editor_buffer_move_left(editor, buffer).byte_count)
-        return sl(editor_token) { editor_token_tag_empty, buffer->text };
+    if (!buffer->cursor_offset)
+        return sl(editor_token) { editor_token_tag_empty, mos_substring(buffer->text, 0, 0) };
+
+    u8 *cursor = buffer->text.base + buffer->cursor_offset;
+
+    // assuming tokens don't include new lines, this is probably the most relybale way to get the current token
+    if (!editor_buffer_to_line_start(editor, buffer))
+    {
+        u32 byte_count = editor_buffer_move_left(editor, buffer).byte_count;
+        assert(byte_count);
+        return sl(editor_token) { editor_token_tag_newline, mos_substring(buffer->text, buffer->cursor_offset, 1) };
+    }
+
+    string text = mos_remaining_substring(buffer->text, buffer->cursor_offset);
+    assert(text.count);
+
+    editor_token token;
+    while (text.count)
+    {
+        token = editor_token_advance(editor, &text);
+        assert(token.text.count);
+
+        u8 *token_end = token.text.base + token.text.count;
+        if (token_end >= cursor)
+            break;
+    }
+
+    buffer->cursor_offset = (u32) (token.text.base - buffer->text.base);
+    return token;
+
+#if 0
+
 
     string text = mos_remaining_substring(buffer->text, buffer->cursor_offset);
     editor_token current_token = editor_token_advance(editor, &text);
@@ -1966,6 +1999,7 @@ editor_buffer_to_current_token_start_signature
     current_token.text.base  = buffer->text.base + buffer->cursor_offset;
     current_token.text.count = (usize) (current_token_end - current_token.text.base);
     return current_token;
+#endif
 }
 
 editor_get_absolute_path_signature
@@ -2253,25 +2287,51 @@ editor_token_advance_signature
 
     string start = *iterator;
 
-    if (mos_skip_white_space(iterator))
+    if (mos_try_skip(iterator, s("\n")))
+        return sl(editor_token) { editor_token_tag_newline, mos_substring_until_end(start, *iterator) };
+
+    if (mos_skip_set(iterator, s(" \t")))
         return sl(editor_token) { editor_token_tag_space, mos_substring_until_end(start, *iterator) };
 
-    f64 f64_value;
-    s64 s64_value;
-    u64 u64_value;
-    if (mos_parse_f64(&f64_value, iterator) || mos_parse_s64(&s64_value, iterator) || mos_parse_u64(&u64_value, iterator))
-        return sl(editor_token) { editor_token_tag_number, mos_substring_until_end(start, *iterator) };
+    {
+        f64 f64_value;
+        s64 s64_value;
+        u64 u64_value;
 
-    if (mos_try_skip(iterator, s("\"")))
+        if (!mos_try_skip(iterator, s("0x")) || !mos_parse_u64_ex(&u64_value, iterator, 16))
+            *iterator = start;
+
+        if (!mos_try_skip(iterator, s("0b")) || !mos_parse_u64_ex(&u64_value, iterator, 2))
+            *iterator = start;
+
+        if (start.base == iterator->base)
+            mos_parse_f64(&f64_value, iterator) || mos_parse_s64(&s64_value, iterator) || mos_parse_u64(&u64_value, iterator);
+
+        if (start.base < iterator->base)
+        {
+            // HACK: skip suffixes
+            mos_skip_set(iterator, s("fFuUlL"));
+
+            return sl(editor_token) { editor_token_tag_number, mos_substring_until_end(start, *iterator) };
+        }
+    }
+
+    if (editor->skip_quoated_string_tokens && mos_try_skip(iterator, s("\"")))
     {
         while (iterator->count)
         {
-            u32 head = mos_utf8_advance(iterator).utf32_code;
+            mos_utf8_result result = mos_utf8_advance(iterator);
 
-            if (iterator->count && (head == '\\'))
+            if (iterator->count && (result.utf32_code == '\\'))
                 mos_utf8_advance(iterator);
-            else if (head == '"')
+            else if (result.utf32_code == '"')
                 break;
+            else if (result.utf32_code == '\n')
+            {
+                iterator->base  -= result.byte_count;
+                iterator->count += result.byte_count;
+                break;
+            }
         }
 
         return sl(editor_token) { editor_token_tag_string, mos_substring_until_end(start, *iterator) };

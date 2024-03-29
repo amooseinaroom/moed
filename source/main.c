@@ -16,6 +16,7 @@
 #define STBTT_assert(x) STBTT_assert_wrapper(x)
 #include "stb_truetype.h"
 
+#define STBI_ASSERT(x) STBTT_assert_wrapper(x)
 #include "stb_image.h"
 
 #define moui_gl_implementation
@@ -93,6 +94,17 @@ const rgba caret_color      = { 0.2f, 1.0f, 0.2f, 0.5f };
 const rgba text_selection_color = { 1.0f, 1.0f, 1.0f, 0.25f };
 const rgba edit_focus_color = { 0.6f, 0.4f, 0.1f, 1.0f };
 
+const rgba text_token_colors[] =
+{
+    { 0.0f, 0.0f, 0.0f, 1.0f }, // empty
+    { 0.4f, 0.4f, 0.4f, 1.0f }, // space
+    { 0.4f, 0.4f, 0.4f, 1.0f }, // newline
+    { 0.9f, 0.9f, 0.9f, 1.0f }, // name
+    { 0.5f, 0.7f, 1.0f, 1.0f }, // number
+    { 0.9f, 0.5f, 0.5f, 1.0f }, // symbol
+    { 0.7f, 1.0f, 0.5f, 1.0f }, // string
+};
+
 f32 editor_box_inset = 4;
 
 typedef enum
@@ -122,8 +134,8 @@ array_type(render_glyph_array, render_glyph);
 #define render_single_line_text_edit_signature void render_single_line_text_edit(moui_state *ui, program_state *program, moui_simple_font font, moui_text_cursor *draw_cursor, editor_editable_buffer *buffer, b8 is_active)
 render_single_line_text_edit_signature;
 
-#define render_single_line_text_signature void render_single_line_text(moui_state *ui, moui_simple_font font, moui_text_cursor *draw_cursor, editor_editable_buffer *buffer, editor_settings settings, moma_arena *tmemory)
-render_single_line_text_signature;
+#define render_text_signature b8 render_text(moui_state *ui, moui_simple_font font, moui_text_cursor *draw_cursor, editor_state *editor, editor_editable_buffer *buffer, editor_settings settings, moma_arena *tmemory, b8 highlight_tokens)
+render_text_signature;
 
 #define render_glyph_add_signature void render_glyph_add(moma_arena *memory, render_glyph_array *glyphs, editor_settings settings, rgba color, u8 *text_base, moui_simple_text_iterator *iterator)
 render_glyph_add_signature;
@@ -167,7 +179,7 @@ int main(int argument_count, char *arguments[])
 
     editor_init(&program->editor, &platform);
     program->settings.max_file_display_count = 16;
-    program->settings.show_white_space = true;
+    program->settings.show_white_space = false;
 
     {
         editor_state *editor = &program->editor;
@@ -514,58 +526,94 @@ mop_hot_update_signature
 
         editable_buffer.text.count = editable_buffer.cursor_offset;
         editable_buffer.cursor_offset          = cursor_offset;
-        editable_buffer.selection_start_offset = editable_buffer.selection_start_offset - active_buffer->draw_line_offset;
 
-        render_single_line_text(ui, font, &draw_cursor, &editable_buffer, program->settings, &program->memory);
+        if (editable_buffer.selection_start_offset < active_buffer->draw_line_offset)
+            editable_buffer.selection_start_offset = 0;
+        else
+        {
+            editable_buffer.selection_start_offset = min(editable_buffer.selection_start_offset - active_buffer->draw_line_offset, editable_buffer.text.count);
+        }
+
+        if (render_text(ui, font, &draw_cursor, editor, &editable_buffer, program->settings, &program->memory, true))
+            editable_buffer.selection_start_offset = editable_buffer.selection_start_offset + active_buffer->draw_line_offset;
+        else
+            editable_buffer.selection_start_offset = active_buffer->selection_start_offset;
 
         editable_buffer.text                   = text;
         editable_buffer.cursor_offset          = editable_buffer.cursor_offset + active_buffer->draw_line_offset;
-        editable_buffer.selection_start_offset = editable_buffer.selection_start_offset + active_buffer->draw_line_offset;
 
         editor_buffer_edit_end(editor, active_buffer, editable_buffer);
     }
 }
 
-render_single_line_text_signature
+void render_append_glyphs(moma_arena *memory, render_glyph_array *glyphs, editor_state *editor, editor_settings settings, string text, moui_simple_text_iterator *text_iterator)
+{
+    while (text_iterator->text.count)
+    {
+        editor_token token = editor_token_advance(editor, &text_iterator->text);
+        assert(token.text.count);
+
+        string remaining_text = text_iterator->text;
+        text_iterator->text = token.text;
+
+        assert(token.tag < carray_count(text_token_colors));
+        rgba token_color = text_token_colors[token.tag];
+
+        while (text_iterator->text.count)
+            render_glyph_add(memory, glyphs, settings, token_color, text.base, text_iterator);
+
+        text_iterator->text = remaining_text;
+    }
+}
+
+render_text_signature
 {
     usize tmemory_frame = tmemory->used_count;
 
     string text = buffer->text;
     assert(buffer->cursor_offset <= text.count);
 
-    string left = { text.base, buffer->cursor_offset };
+    u32 cursor_offset = buffer->cursor_offset;
+    editor_token current_token = editor_buffer_to_current_token_start(editor, buffer);
+
+    u32 current_token_offset = buffer->cursor_offset;
+    buffer->cursor_offset = cursor_offset;
+
+    string left = mos_substring(text, 0, current_token_offset);
 
     moui_simple_text_iterator text_iterator = { font, *draw_cursor, left };
 
-    draw_text_closest_hit closest_hit = {0};
-    closest_hit.x_distance = 1000000.0f;
-    closest_hit.y_distance = 1000000.0f;
-
     render_glyph_array glyphs = {0};
 
-    while (text_iterator.text.count)
-    {
-        render_glyph_add(tmemory, &glyphs, settings, text_color, text.base, &text_iterator);
-    }
+    render_append_glyphs(tmemory, &glyphs, editor, settings, text, &text_iterator);
 
+    // render token where the cursor is dividing it into a left and right part
+    // so we can place the caret properly
     box2 caret_box;
-    caret_box.min = text_iterator.cursor.position;
-    caret_box.min.x -= 2;
-    caret_box.min.y -= font.bottom_to_line;
-    caret_box.max = vec2_add(caret_box.min, sl(vec2) { 5, (f32) font.line_height });
+    {
+        string caret_left = mos_substring(current_token.text, 0, (usize) (text.base + buffer->cursor_offset - current_token.text.base));
+
+        rgba token_color = text_token_colors[current_token.tag];
+
+        text_iterator.text = caret_left;
+        while (text_iterator.text.count)
+            render_glyph_add(tmemory, &glyphs, settings, token_color, text.base, &text_iterator);
+
+        caret_box.min = text_iterator.cursor.position;
+        caret_box.min.x -= 2;
+        caret_box.min.y -= font.bottom_to_line;
+        caret_box.max = vec2_add(caret_box.min, sl(vec2) { 5, (f32) font.line_height });
+
+        string caret_right = mos_remaining_substring(current_token.text, caret_left.count);
+
+        text_iterator.text = caret_right;
+        while (text_iterator.text.count)
+            render_glyph_add(tmemory, &glyphs, settings, token_color, text.base, &text_iterator);
+    }
 
     // right
-    text_iterator.text = sl(string) { text.base + buffer->cursor_offset, text.count - buffer->cursor_offset };
-    while (text_iterator.text.count)
-    {
-        render_glyph_add(tmemory, &glyphs, settings, text_color, text.base, &text_iterator);
-    }
-
-    if (closest_hit.text_base)
-    {
-        buffer->cursor_offset = (u32) (closest_hit.text_base - buffer->text.base);
-        assert(buffer->cursor_offset <= text.count);
-    }
+    text_iterator.text = mos_remaining_substring(text, current_token_offset + current_token.text.count);
+    render_append_glyphs(tmemory, &glyphs, editor, settings, text, &text_iterator);
 
     // render
     {
@@ -622,6 +670,7 @@ render_single_line_text_signature
     }
 
     // check mouse selection
+    b8 selection_start_changed = false;
     if (ui->input.cursor_active_mask & 1)
     {
         f32 closest_distance_x = 100000.0f;
@@ -640,7 +689,6 @@ render_single_line_text_signature
                 y_distance = ui->input.cursor.y - bounding_box.max.y;
 
             u32 text_offset = glyph.text_offset;
-        #if 1
             f32 x_center = (bounding_box.min.x + bounding_box.max.x) * 0.5f;
             f32 x_distance;
             if (ui->input.cursor.x < x_center)
@@ -650,13 +698,6 @@ render_single_line_text_signature
                 x_distance = ui->input.cursor.x - x_center;
                 text_offset += glyph.text_count;
             }
-        #else
-            f32 x_distance = 0;
-            if (ui->input.cursor.x < bounding_box.min.x)
-                x_distance = bounding_box.min.x - ui->input.cursor.x;
-            else if (ui->input.cursor.x >= bounding_box.max.x)
-                x_distance = ui->input.cursor.x - bounding_box.max.x;
-        #endif
 
             if (y_distance < closest_distance_y)
             {
@@ -676,7 +717,10 @@ render_single_line_text_signature
             buffer->cursor_offset = closest_text_offset;
 
             if ((ui->input.previous_cursor_active_mask & 1) == 0)
+            {
                 buffer->selection_start_offset = buffer->cursor_offset;
+                selection_start_changed = true;
+            }
         }
     }
 
@@ -699,6 +743,8 @@ render_single_line_text_signature
     *draw_cursor = text_iterator.cursor;
 
     tmemory->used_count = tmemory_frame;
+
+    return selection_start_changed;
 }
 
 render_glyph_add_signature
@@ -720,7 +766,7 @@ render_glyph_add_signature
         if (settings.show_white_space)
         {
             render_code = 'n';
-            *(vec3 *) &color = vec3_scale(*(vec3 *) &color, 0.5f);
+            // *(vec3 *) &color = vec3_scale(*(vec3 *) &color, 0.5f);
         }
         else
         {
@@ -733,7 +779,7 @@ render_glyph_add_signature
     if ((render_code == ' ') && settings.show_white_space)
     {
         render_code = '.';
-        *(vec3 *) &color = vec3_scale(*(vec3 *) &color, 0.5f);
+        // *(vec3 *) &color = vec3_scale(*(vec3 *) &color, 0.5f);
     }
 
     moui_f32 bottom_to_line = iterator->font.bottom_to_line;
@@ -795,7 +841,7 @@ render_single_line_text_edit_signature
     f32 min_x = draw_cursor->position.x;
     moui_box2 edit_box = moui_used_box_begin(ui);
 
-    render_single_line_text(ui, font, draw_cursor, buffer, program->settings, &program->memory);
+    render_text(ui, font, draw_cursor, editor, buffer, program->settings, &program->memory, false);
     moui_text_cursor_advance_line(font, draw_cursor);
 
     edit_box = moui_used_box_end(ui, edit_box);
