@@ -43,13 +43,16 @@ The editor automatically inserts and removes tabs when adding or removing lines 
 
 Holding down shift while navigating preserves the start of the selection.
 
-Holding down control while navigating or deleting moves by simple tokens like:
-- number
-- quoted string
-- name
-- single character symbol
-- white space
+Holding down control while navigating or deleting moves by simple tokens.
 
+Tokens:
+  - number
+  - quoted string
+  - name
+  - single character symbol
+  - white space
+
+Key bindings:
 - ctrl+S : save active buffer
 - ctrl+shift+P : reload active buffer
 - ctrl+P : toggle file open mode
