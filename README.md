@@ -48,8 +48,8 @@ Holding down control while navigating or deleting moves by simple tokens.
 Tokens:
   - number
   - double quoted string
-  - single character symbol: `!"#$%&'()*+,-./:;<=>?@[\\]^\`{|}~`
-  - white space: `\\t\\n\\r`
+  - single character symbol: <code>!"#$%&'()*+,-./:;<=>?@[\\]^`{|}~</code>
+  - white space: ` \t\n\r`
   - name: letters are everything that are not symbols, white space or digits
 
 Key bindings:
